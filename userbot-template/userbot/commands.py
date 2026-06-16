@@ -151,6 +151,14 @@ def _display_name(user) -> str:
     return (getattr(user, "first_name", None) or getattr(user, "username", None) or "user").strip() or "user"
 
 
+def _normalize_filter_text(text: str) -> str:
+    return " ".join((text or "").split()).casefold()
+
+
+def _extract_message_text(message) -> str:
+    return " ".join(((getattr(message, "raw_text", "") or getattr(message, "message", "") or "")).split()).strip()
+
+
 async def _resolve_mention_target(event_client, user) -> InputUser:
     try:
         input_user = get_input_user(user)
@@ -406,7 +414,7 @@ def register(client):
             "🔨 Moderasiya:\n"
             "<code>.ban</code> | <code>.unban</code> | <code>.mute</code> | <code>.block</code> | <code>.unblock</code>\n\n"
             "👤 İstifadəçi & Qrup:\n"
-            f"<code>.info</code> | <code>.tag [mod] [1-10]</code> | <code>.tagsebeb səbəb | mod 1-10</code> | <code>.stop</code> | <code>.tagtime {current_delay}</code> | <code>.setwelcome</code>\n\n"
+            f"<code>.info</code> | <code>.tag [mod] [1-10]</code> | <code>.tagsebeb səbəb | mod 1-10</code> | <code>.stop</code> | <code>.tagtime {current_delay}</code> | <code>.setwelcome</code> | <code>.filter</code> | <code>.filtersil</code>\n\n"
             "🧬 Profil:\n"
             "<code>.klon</code> | <code>.unklon</code>\n\n"
             f"🔌 Aktiv Pluginlər ({len(plugins)}):\n"
@@ -689,6 +697,56 @@ def register(client):
         mode_key = event.data.decode().split(":", 1)[1]
         await event.answer(f"{TAG_MODES[mode_key].title} başladı • {delay}s")
         await _run_tag_mode(event, mode_key, delay)
+
+    @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("filter")))
+    async def add_filter(event):
+        if not event.is_group:
+            return await edit_safe(event, "⚠️ Yalnız qruplarda işləyir.")
+        trigger = event.pattern_match.group(1).strip()
+        if not trigger:
+            return await edit_safe(
+                event,
+                f"ℹ️ İstifadə: <code>{P}filter Salam</code> və ya cavab verib <code>{P}filter Salam</code>",
+            )
+
+        response_text = trigger
+        if event.is_reply:
+            reply = await event.get_reply_message()
+            reply_text = _extract_message_text(reply)
+            if not reply_text:
+                return await edit_safe(event, "⚠️ Reply etdiyin mesajda mətn olmalıdır.")
+            response_text = reply_text
+
+        await db.save_filter(event.chat_id, trigger, response_text)
+        await edit_safe(event, f"✅ Filter aktivləşdi: <code>{trigger}</code>")
+
+    @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("filtersil")))
+    async def remove_filter_cmd(event):
+        if not event.is_group:
+            return await edit_safe(event, "⚠️ Yalnız qruplarda işləyir.")
+        trigger = event.pattern_match.group(1).strip()
+        if not trigger:
+            return await edit_safe(event, f"ℹ️ İstifadə: <code>{P}filtersil Salam</code>")
+        removed = await db.remove_filter(event.chat_id, trigger)
+        if removed:
+            await edit_safe(event, f"🗑 Filter silindi: <code>{trigger}</code>")
+        else:
+            await edit_safe(event, f"ℹ️ Filter tapılmadı: <code>{trigger}</code>")
+
+    @client.on(events.NewMessage(incoming=True))
+    async def filter_listener(event):
+        if not event.is_group:
+            return
+        message_text = _extract_message_text(event.message)
+        if not message_text:
+            return
+        response_text = await db.get_filter(event.chat_id, message_text)
+        if not response_text:
+            return
+        try:
+            await event.reply(response_text)
+        except Exception as exc:
+            log.warning("filter reply err: %s", exc)
 
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("setwelcome")))
     async def setwelcome(event):
