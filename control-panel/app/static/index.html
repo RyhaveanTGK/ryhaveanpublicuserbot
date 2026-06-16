@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="az">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Ryhavean</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero card">
+      <div>
+        <p class="eyebrow">Ryhavean</p>
+        <h1>Telegram Userbot Deploy Panel</h1>
+        <p class="muted">Bu təhlükəsiz versiyada login kodu toplanmır. Yalnız özün yaratdığın hazır String Session ilə deploy edilir.</p>
+      </div>
+      <div class="hero-badge" id="profileBadge">Bağlanır...</div>
+    </section>
+
+    <section class="card">
+      <h2>1. Hesab məlumatları</h2>
+      <form id="credentialForm" class="stack">
+        <label>
+          <span>Render API Key</span>
+          <input type="password" name="render_api_key" placeholder="rnd_..." required />
+          <small><a href="https://dashboard.render.com/u/settings/api-keys" target="_blank" rel="noreferrer">Render API Key al</a></small>
+        </label>
+
+        <label>
+          <span>Telegram API ID</span>
+          <input type="number" name="api_id" placeholder="12345678" required />
+          <small><a href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">API ID al</a></small>
+        </label>
+
+        <label>
+          <span>Telegram API Hash</span>
+          <input type="password" name="api_hash" placeholder="api hash" required />
+          <small><a href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">API Hash al</a></small>
+        </label>
+
+        <label>
+          <span>String Session</span>
+          <textarea name="session_string" rows="4" placeholder="Hazır StringSession buraya daxil edilir" required></textarea>
+          <small>Telefon nömrəsi və login kodu bu paneldə toplanmır. String Session-u lokal yaratmaq üçün arxivdə <code>tools/generate_string_session.py</code> var.</small>
+        </label>
+
+        <label>
+          <span>Userbot üçün MongoDB URI</span>
+          <input type="text" name="mongodb_uri" placeholder="mongodb+srv://... və ya mongodb://..." />
+          <small>Boş buraxsan control paneldəki əsas MongoDB URI istifadə ediləcək.</small>
+        </label>
+
+        <div class="grid two">
+          <label>
+            <span>Command prefix</span>
+            <input type="text" name="cmd_prefix" value="." maxlength="3" />
+          </label>
+          <label>
+            <span>APP_BASE_URL override</span>
+            <input type="url" name="app_base_url" placeholder="https://my-userbot-service.onrender.com" />
+          </label>
+        </div>
+
+        <button type="submit" class="primary">Məlumatları MongoDB-də saxla</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>2. Deploy</h2>
+      <div class="stack">
+        <label>
+          <span>Service adı</span>
+          <input id="serviceName" type="text" placeholder="ryhavean-userbot-123456" />
+          <small>Boş buraxılsa avtomatik yaradılacaq.</small>
+        </label>
+        <div class="actions">
+          <button id="deployBtn" class="primary">Deploy başlat</button>
+          <button id="refreshBtn" class="secondary" type="button">Statusu yenilə</button>
+        </div>
+        <div class="note">
+          Render Free plan yuxuya gedə bilər. Deploy tamamlanandan sonra service linkini <a href="https://uptimerobot.com/" target="_blank" rel="noreferrer">UptimeRobot</a> üzərinə əl ilə əlavə edə bilərsən.
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>3. Canlı qurulum vəziyyəti</h2>
+      <div class="status-bar">
+        <strong id="statusText">idle</strong>
+        <span id="serviceUrlWrap"></span>
+      </div>
+      <div id="logList" class="log-list"></div>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
