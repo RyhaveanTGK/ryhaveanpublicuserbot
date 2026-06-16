@@ -17,7 +17,8 @@ from telethon.tl.functions.channels import EditBannedRequest
 from telethon.tl.functions.contacts import BlockRequest, UnblockRequest
 from telethon.tl.functions.photos import DeletePhotosRequest, GetUserPhotosRequest, UploadProfilePhotoRequest
 from telethon.tl.functions.users import GetFullUserRequest
-from telethon.tl.types import ChatBannedRights, MessageEntityMentionName
+from telethon.tl.types import ChatBannedRights, InputPeerUser, InputUser, MessageEntityMentionName
+from telethon.utils import get_input_user
 
 from config import Config
 import db
@@ -132,7 +133,32 @@ def _display_name(user) -> str:
     return (getattr(user, "first_name", None) or getattr(user, "username", None) or "user").strip() or "user"
 
 
-def _build_mention_entities(users: Iterable, *, prefix: str = "") -> tuple[str, list[MessageEntityMentionName]]:
+async def _resolve_mention_target(event_client, user) -> InputUser:
+    try:
+        input_user = get_input_user(user)
+        if isinstance(input_user, InputUser):
+            return input_user
+    except Exception:
+        pass
+
+    try:
+        input_entity = await event_client.get_input_entity(user)
+    except Exception:
+        input_entity = None
+
+    if isinstance(input_entity, InputUser):
+        return input_entity
+    if isinstance(input_entity, InputPeerUser):
+        return InputUser(input_entity.user_id, input_entity.access_hash)
+
+    access_hash = getattr(user, "access_hash", None)
+    if access_hash is not None:
+        return InputUser(user.id, access_hash)
+
+    raise ValueError(f"Mention entity resolve olunmadı: {getattr(user, 'id', 'unknown')}")
+
+
+async def _build_mention_entities(event_client, users: Iterable, *, prefix: str = "") -> tuple[str, list[MessageEntityMentionName]]:
     parts: list[str] = []
     entities: list[MessageEntityMentionName] = []
     current_offset = len(prefix)
@@ -142,8 +168,9 @@ def _build_mention_entities(users: Iterable, *, prefix: str = "") -> tuple[str, 
             parts.append(sep)
             current_offset += len(sep)
         name = _display_name(user)
+        mention_target = await _resolve_mention_target(event_client, user)
         parts.append(name)
-        entities.append(MessageEntityMentionName(offset=current_offset, length=len(name), user_id=user.id))
+        entities.append(MessageEntityMentionName(offset=current_offset, length=len(name), user_id=mention_target))
         current_offset += len(name)
     return "".join(parts), entities
 
@@ -261,7 +288,7 @@ async def _run_tag_mode(event, mode_key: str, delay_seconds: int, reason_text: s
             if reason_text:
                 lines.append(f"📝 Səbəb: {reason_text}")
             prefix = ("\n".join(lines) + "\n") if lines else ""
-            names_text, entities = _build_mention_entities(batch, prefix=prefix)
+            names_text, entities = await _build_mention_entities(event.client, batch, prefix=prefix)
             payload = prefix + names_text
 
             try:
