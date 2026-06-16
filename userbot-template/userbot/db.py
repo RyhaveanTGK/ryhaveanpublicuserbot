@@ -30,6 +30,7 @@ _settings: dict[str, str] = {}
 _welcomes: dict[tuple[int, int], str] = {}
 _clones: dict[int, CloneSnapshot] = {}
 _blocks: set[int] = set()
+_filters: dict[tuple[int, int, str], str] = {}
 
 
 def _owner_scope() -> int:
@@ -55,6 +56,10 @@ def _photo_from_text(photo_text: str | None) -> bytes:
         return b""
 
 
+def _normalize_filter_text(text: str) -> str:
+    return " ".join((text or "").split()).casefold()
+
+
 async def _ensure_indexes() -> None:
     # FIX: proper None check (NO truth value testing)
     if _database is None:
@@ -77,6 +82,11 @@ async def _ensure_indexes() -> None:
 
     await _database.blocks.create_index(
         [("owner_scope", 1), ("user_id", 1)],
+        unique=True,
+    )
+
+    await _database.filters.create_index(
+        [("owner_scope", 1), ("chat_id", 1), ("trigger", 1)],
         unique=True,
     )
 
@@ -395,3 +405,50 @@ async def remove_plugin(name: str) -> bool:
     _settings.pop(f"plugin:{name}", None)
     _settings.pop(f"plugin_meta:{name}", None)
     return existed
+
+
+async def save_filter(chat_id: int, trigger: str, response: str):
+    owner_scope = _owner_scope()
+    normalized_trigger = _normalize_filter_text(trigger)
+    if not normalized_trigger:
+        raise ValueError("Filter trigger boş ola bilməz")
+
+    if _mongo_enabled():
+        await _database.filters.update_one(
+            {"owner_scope": owner_scope, "chat_id": int(chat_id), "trigger": normalized_trigger},
+            {"$set": {"response": response, "trigger_text": trigger.strip()}},
+            upsert=True,
+        )
+        return
+
+    _filters[(owner_scope, int(chat_id), normalized_trigger)] = response
+
+
+async def get_filter(chat_id: int, trigger: str) -> Optional[str]:
+    owner_scope = _owner_scope()
+    normalized_trigger = _normalize_filter_text(trigger)
+    if not normalized_trigger:
+        return None
+
+    if _mongo_enabled():
+        row = await _database.filters.find_one(
+            {"owner_scope": owner_scope, "chat_id": int(chat_id), "trigger": normalized_trigger}
+        )
+        return str(row.get("response", "")) if row else None
+
+    return _filters.get((owner_scope, int(chat_id), normalized_trigger))
+
+
+async def remove_filter(chat_id: int, trigger: str) -> bool:
+    owner_scope = _owner_scope()
+    normalized_trigger = _normalize_filter_text(trigger)
+    if not normalized_trigger:
+        return False
+
+    if _mongo_enabled():
+        result = await _database.filters.delete_one(
+            {"owner_scope": owner_scope, "chat_id": int(chat_id), "trigger": normalized_trigger}
+        )
+        return result.deleted_count > 0
+
+    return _filters.pop((owner_scope, int(chat_id), normalized_trigger), None) is not None
