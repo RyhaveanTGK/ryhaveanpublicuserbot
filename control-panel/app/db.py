@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
@@ -10,6 +10,8 @@ from crypto import decrypt_text, encrypt_text
 
 _client: AsyncIOMotorClient | None = None
 _db: AsyncIOMotorDatabase | None = None
+_LOGIN_SESSION_TTL_MINUTES = 15
+
 
 
 def utcnow() -> datetime:
@@ -25,6 +27,8 @@ async def connect_db() -> None:
     await _db.users.create_index("telegram_id", unique=True)
     await _db.users.create_index("service_id")
     await _db.deployment_events.create_index([("telegram_id", 1), ("created_at", -1)])
+    await _db.telegram_auth_sessions.create_index("telegram_id", unique=True)
+    await _db.telegram_auth_sessions.create_index("expires_at", expireAfterSeconds=0)
 
 
 async def close_db() -> None:
@@ -33,6 +37,7 @@ async def close_db() -> None:
         _client.close()
     _client = None
     _db = None
+
 
 
 def database() -> AsyncIOMotorDatabase:
@@ -110,6 +115,49 @@ async def get_decrypted_credentials(telegram_id: int) -> dict[str, Any] | None:
         "cmd_prefix": credentials.get("cmd_prefix", "."),
         "app_base_url": credentials.get("app_base_url", ""),
     }
+
+
+async def save_phone_login_session(
+    telegram_id: int,
+    *,
+    api_id: int,
+    api_hash: str,
+    phone_number: str,
+    phone_code_hash: str,
+) -> None:
+    await database().telegram_auth_sessions.update_one(
+        {"telegram_id": telegram_id},
+        {
+            "$set": {
+                "telegram_id": telegram_id,
+                "api_id": int(api_id),
+                "api_hash": encrypt_text(api_hash),
+                "phone_number": phone_number,
+                "phone_code_hash": phone_code_hash,
+                "created_at": utcnow(),
+                "expires_at": utcnow() + timedelta(minutes=_LOGIN_SESSION_TTL_MINUTES),
+            }
+        },
+        upsert=True,
+    )
+
+
+async def get_phone_login_session(telegram_id: int) -> dict[str, Any] | None:
+    row = await database().telegram_auth_sessions.find_one({"telegram_id": telegram_id})
+    if not row:
+        return None
+    return {
+        "telegram_id": telegram_id,
+        "api_id": int(row.get("api_id", 0)),
+        "api_hash": decrypt_text(row.get("api_hash")),
+        "phone_number": row.get("phone_number", ""),
+        "phone_code_hash": row.get("phone_code_hash", ""),
+        "expires_at": row.get("expires_at"),
+    }
+
+
+async def clear_phone_login_session(telegram_id: int) -> None:
+    await database().telegram_auth_sessions.delete_one({"telegram_id": telegram_id})
 
 
 async def save_service_info(
