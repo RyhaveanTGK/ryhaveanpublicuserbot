@@ -1,0 +1,30 @@
+# Camera Trap Plugin üçün tələb 
+telethon==1.36.0
+Pillow==10.3.0
+phonenumbers
+pyfiglet
+# Sizin mövcud paketləriniz
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+asyncpg==0.29.0
+redis==5.0.8
+cryptography==43.0.1
+python-dotenv==1.0.1
+httpx==0.27.2
+motor
+pydantic==2.9.2
+speedtest-cli
+deep-translator==1.11.4
+# Audio metadata / music plugins
+mutagen>=1.47.0
+# Voice Studio
+edge-tts>=7.0.2
+gTTS>=2.5.3
+yt-dlp>=2025.1.15
+py-tgcalls>=2.2.0
+# Gələcəkdə faydalı ola biləcək paketlər
+aiofiles>=24.1.0
+aiohttp>=3.10.5
+requests>=2.32.3
+psutil>=6.0.0
+humanize>=4.10.0
