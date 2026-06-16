@@ -187,6 +187,8 @@ def _snapshot_runtime_config() -> dict[str, object]:
         "session_string": _clean_text(os.getenv("SESSION_STRING", Config.SESSION_STRING)),
         "mongodb_uri": _clean_text(os.getenv("MONGODB_URI", Config.MONGODB_URI)),
         "mongodb_db": _clean_text(os.getenv("MONGODB_DB", Config.MONGODB_DB)) or "ryhavean_userbot",
+        "plugin_mongodb_uri": _clean_text(os.getenv("PLUGIN_MONGODB_URI", Config.PLUGIN_MONGODB_URI)),
+        "plugin_mongodb_db": _clean_text(os.getenv("PLUGIN_MONGODB_DB", Config.PLUGIN_MONGODB_DB)) or "ryhavean_shared_plugins",
         "owner_id": _safe_int(os.getenv("OWNER_ID", str(Config.OWNER_ID or 0)), 0),
         "cmd_prefix": _clean_text(os.getenv("CMD_PREFIX", Config.CMD_PREFIX)) or ".",
     }
@@ -198,6 +200,8 @@ def _apply_runtime_config(config_map: dict[str, object]) -> None:
     session_string = _clean_text(config_map.get("session_string"))
     mongodb_uri = _clean_text(config_map.get("mongodb_uri"))
     mongodb_db = _clean_text(config_map.get("mongodb_db")) or "ryhavean_userbot"
+    plugin_mongodb_uri = _clean_text(config_map.get("plugin_mongodb_uri")) or mongodb_uri
+    plugin_mongodb_db = _clean_text(config_map.get("plugin_mongodb_db")) or "ryhavean_shared_plugins"
     owner_id = _safe_int(config_map.get("owner_id"), 0)
     cmd_prefix = _clean_text(config_map.get("cmd_prefix")) or "."
 
@@ -210,6 +214,9 @@ def _apply_runtime_config(config_map: dict[str, object]) -> None:
     if mongodb_uri:
         os.environ["MONGODB_URI"] = mongodb_uri
     os.environ["MONGODB_DB"] = mongodb_db
+    if plugin_mongodb_uri:
+        os.environ["PLUGIN_MONGODB_URI"] = plugin_mongodb_uri
+    os.environ["PLUGIN_MONGODB_DB"] = plugin_mongodb_db
     if owner_id > 0:
         os.environ["OWNER_ID"] = str(owner_id)
     os.environ["CMD_PREFIX"] = cmd_prefix
@@ -219,6 +226,8 @@ def _apply_runtime_config(config_map: dict[str, object]) -> None:
     Config.SESSION_STRING = session_string
     Config.MONGODB_URI = mongodb_uri
     Config.MONGODB_DB = mongodb_db
+    Config.PLUGIN_MONGODB_URI = plugin_mongodb_uri
+    Config.PLUGIN_MONGODB_DB = plugin_mongodb_db
     Config.OWNER_ID = owner_id
     Config.CMD_PREFIX = cmd_prefix
 
