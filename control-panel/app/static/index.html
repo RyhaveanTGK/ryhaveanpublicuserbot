@@ -13,7 +13,7 @@
       <div>
         <p class="eyebrow">Ryhavean</p>
         <h1>Telegram Userbot Deploy Panel</h1>
-        <p class="muted">Bu təhlükəsiz versiyada login kodu toplanmır. Yalnız özün yaratdığın hazır String Session ilə deploy edilir.</p>
+        <p class="muted">String Session əl ilə yazılmır. Telefon nömrəsini ölkə kodu ilə daxil et, Telegram kodunu təsdiqlə və sistem StringSession-u avtomatik yaratsın.</p>
       </div>
       <div class="hero-badge" id="profileBadge">Bağlanır...</div>
     </section>
@@ -39,11 +39,38 @@
           <small><a href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">API Hash al</a></small>
         </label>
 
-        <label>
-          <span>String Session</span>
-          <textarea name="session_string" rows="4" placeholder="Hazır StringSession buraya daxil edilir" required></textarea>
-          <small>Telefon nömrəsi və login kodu bu paneldə toplanmır. String Session-u lokal yaratmaq üçün arxivdə <code>tools/generate_string_session.py</code> var.</small>
-        </label>
+        <div class="stack">
+          <label>
+            <span>Telegram nömrəsi</span>
+            <input type="tel" id="phoneNumber" placeholder="+994501234567" inputmode="tel" />
+            <small>Ölkə kodu ilə daxil et. Kod yalnız qısa müddətlik doğrulama üçün istifadə olunur.</small>
+          </label>
+
+          <div class="actions">
+            <button type="button" id="sendCodeBtn" class="secondary">Kod göndər</button>
+          </div>
+
+          <div class="grid two">
+            <label>
+              <span>Təsdiq kodu</span>
+              <input type="text" id="phoneCode" placeholder="12345" inputmode="numeric" />
+            </label>
+            <label id="passwordWrap" style="display:none;">
+              <span>2FA şifrəsi</span>
+              <input type="password" id="twoFactorPassword" placeholder="Telegram Cloud Password" />
+            </label>
+          </div>
+
+          <div class="actions">
+            <button type="button" id="verifyCodeBtn" class="secondary">Kodu təsdiqlə</button>
+          </div>
+
+          <label>
+            <span>Yaradılmış String Session</span>
+            <textarea id="sessionString" name="session_string" rows="4" placeholder="Kod təsdiqlənəndən sonra avtomatik doldurulacaq" readonly required></textarea>
+            <small id="sessionStatus">Hələ yaradılmayıb.</small>
+          </label>
+        </div>
 
         <label>
           <span>Userbot üçün MongoDB URI</span>
@@ -79,7 +106,7 @@
           <button id="refreshBtn" class="secondary" type="button">Statusu yenilə</button>
         </div>
         <div class="note">
-          Render Free plan yuxuya gedə bilər. Deploy tamamlanandan sonra service linkini <a href="https://uptimerobot.com/" target="_blank" rel="noreferrer">UptimeRobot</a> üzərinə əl ilə əlavə edə bilərsən.
+          Render Free plan yuxuya gedə bilər. Deploy tamamlanandan sonra service linkini <a href="https://uptimerobot.com/" target="_blank" rel="noreferrer">UptimeRobot</a> üzərinə əlavə edib <code>/health</code> yoxlaması edə bilərsən.
         </div>
       </div>
     </section>
