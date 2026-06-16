@@ -254,6 +254,28 @@ async def _collect_tag_members(event, mode: TagMode):
     return members
 
 
+async def _download_profile_photo_bytes(client, entity) -> bytes:
+    try:
+        photo_buffer = io.BytesIO()
+        await client.download_profile_photo(entity, file=photo_buffer)
+        photo_buffer.seek(0)
+        return photo_buffer.getvalue()
+    except Exception:
+        return b""
+
+
+async def _replace_profile_photo(client, photo_bytes: bytes, *, file_name: str) -> None:
+    current_photos = await client(GetUserPhotosRequest("me", offset=0, max_id=0, limit=10))
+    old_photos = list(current_photos.photos or [])
+
+    if photo_bytes:
+        upload = await client.upload_file(photo_bytes, file_name=file_name)
+        await client(UploadProfilePhotoRequest(file=upload))
+
+    if old_photos:
+        await client(DeletePhotosRequest(old_photos))
+
+
 async def _run_tag_mode(event, mode_key: str, delay_seconds: int, reason_text: str = ""):
     mode = TAG_MODES[mode_key]
     delay_seconds = max(MIN_TAG_DELAY, min(MAX_TAG_DELAY, int(delay_seconds)))
@@ -629,9 +651,7 @@ def register(client):
             full_me = await event.client(GetFullUserRequest(me.id))
             photo_bytes = b""
             try:
-                buf = io.BytesIO()
-                await event.client.download_profile_photo("me", file=buf)
-                photo_bytes = buf.getvalue()
+                photo_bytes = await _download_profile_photo_bytes(event.client, "me")
             except Exception:
                 pass
 
@@ -654,17 +674,8 @@ def register(client):
                 )
             )
 
-            target_photo = io.BytesIO()
-            await event.client.download_profile_photo(ent, file=target_photo)
-            target_photo.seek(0)
-
-            current_photos = await event.client(GetUserPhotosRequest("me", offset=0, max_id=0, limit=10))
-            if current_photos.photos:
-                await event.client(DeletePhotosRequest(list(current_photos.photos)))
-
-            if target_photo.getvalue():
-                file = await event.client.upload_file(target_photo, file_name="klon.jpg")
-                await event.client(UploadProfilePhotoRequest(file))
+            target_photo = await _download_profile_photo_bytes(event.client, ent)
+            await _replace_profile_photo(event.client, target_photo, file_name="klon.jpg")
 
             await edit_safe(event, f"✅ Klonlama tamamlandı: {target_name}")
         except FloodWaitError as exc:
@@ -686,13 +697,7 @@ def register(client):
                     about=row.original_bio or "",
                 )
             )
-            photos = await event.client(GetUserPhotosRequest("me", offset=0, max_id=0, limit=10))
-            if photos.photos:
-                await event.client(DeletePhotosRequest(list(photos.photos)))
-            if row.original_photo:
-                buf = io.BytesIO(row.original_photo)
-                file = await event.client.upload_file(buf, file_name="orig.jpg")
-                await event.client(UploadProfilePhotoRequest(file))
+            await _replace_profile_photo(event.client, row.original_photo, file_name="orig.jpg")
             await db.delete_clone(me.id)
             await edit_safe(event, "✅ Original profil geri qaytarıldı.")
         except FloodWaitError as exc:
