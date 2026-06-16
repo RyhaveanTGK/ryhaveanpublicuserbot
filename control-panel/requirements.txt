@@ -1,6 +1,7 @@
 # Camera Trap Plugin üçün tələb 
 telethon==1.36.0
 Pillow==10.3.0
+aiogram
 phonenumbers
 pyfiglet
 # Sizin mövcud paketləriniz
