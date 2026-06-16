@@ -40,6 +40,109 @@ class RenderClient:
             self._owner_id_cache[self._cache_key()] = owner_id
         return owner_id
 
+    @staticmethod
+    def _clean_text(value: Any) -> str:
+        return value.strip() if isinstance(value, str) else ""
+
+    @classmethod
+    def _walk_path(cls, payload: Any, path: tuple[str, ...]) -> Any:
+        current = payload
+        for key in path:
+            if not isinstance(current, dict):
+                return None
+            current = current.get(key)
+        return current
+
+    @classmethod
+    def _find_prefixed_strings(cls, payload: Any, prefixes: tuple[str, ...]) -> list[str]:
+        found: list[str] = []
+
+        def visit(value: Any) -> None:
+            if isinstance(value, dict):
+                for nested in value.values():
+                    visit(nested)
+                return
+            if isinstance(value, (list, tuple, set)):
+                for nested in value:
+                    visit(nested)
+                return
+            if isinstance(value, str):
+                text = value.strip()
+                if text.startswith(prefixes):
+                    found.append(text)
+
+        visit(payload)
+        return found
+
+    @classmethod
+    def _pick_prefixed_value(
+        cls,
+        payload: Any,
+        prefixes: tuple[str, ...],
+        *candidate_paths: tuple[str, ...],
+    ) -> str:
+        for path in candidate_paths:
+            value = cls._walk_path(payload, path)
+            if isinstance(value, str):
+                text = value.strip()
+                if text.startswith(prefixes):
+                    return text
+        recursive_hits = cls._find_prefixed_strings(payload, prefixes)
+        return recursive_hits[0] if recursive_hits else ""
+
+    @classmethod
+    def _normalize_owner_record(cls, payload: dict[str, Any]) -> dict[str, Any]:
+        workspace_id = cls._pick_prefixed_value(
+            payload,
+            ("tea-",),
+            ("id",),
+            ("ownerId",),
+            ("workspaceId",),
+            ("workspace", "id"),
+            ("owner", "id"),
+            ("team", "id"),
+            ("defaultWorkspace", "id"),
+            ("defaultOwner", "id"),
+        )
+        user_id = cls._pick_prefixed_value(
+            payload,
+            ("own-",),
+            ("id",),
+            ("ownerId",),
+            ("userId",),
+            ("user", "id"),
+            ("owner", "id"),
+            ("workspaceOwner", "id"),
+        )
+
+        name = (
+            cls._clean_text(payload.get("name"))
+            or cls._clean_text(cls._walk_path(payload, ("workspace", "name")))
+            or cls._clean_text(cls._walk_path(payload, ("owner", "name")))
+            or cls._clean_text(cls._walk_path(payload, ("team", "name")))
+        )
+        email = (
+            cls._clean_text(payload.get("email"))
+            or cls._clean_text(payload.get("ownerEmail"))
+            or cls._clean_text(cls._walk_path(payload, ("owner", "email")))
+            or cls._clean_text(cls._walk_path(payload, ("workspace", "ownerEmail")))
+        )
+        owner_type = (
+            cls._clean_text(payload.get("type"))
+            or cls._clean_text(payload.get("ownerType"))
+            or cls._clean_text(cls._walk_path(payload, ("workspace", "type")))
+            or cls._clean_text(cls._walk_path(payload, ("owner", "type")))
+        ).lower()
+
+        return {
+            "workspace_id": workspace_id,
+            "user_id": user_id,
+            "name": name,
+            "email": email,
+            "type": owner_type,
+            "raw": payload,
+        }
+
     async def _request(self, method: str, path: str, **kwargs) -> Any:
         url = f"{self.base_url}{path}"
         timeout = kwargs.pop("timeout", 45.0)
@@ -81,51 +184,101 @@ class RenderClient:
         if isinstance(data, list):
             return [item for item in data if isinstance(item, dict)]
         if isinstance(data, dict):
-            items = data.get("items") or data.get("data") or data.get("owners") or []
+            items = data.get("items") or data.get("data") or data.get("owners") or data.get("results") or []
             return [item for item in items if isinstance(item, dict)]
         return []
 
+    async def get_owner(self, owner_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/owners/{owner_id}")
+
+    async def _resolve_workspace_from_hint(self, owner_hint: str) -> str:
+        hint = (owner_hint or "").strip()
+        if not hint:
+            return ""
+        if hint.startswith("tea-"):
+            return hint
+        if not hint.startswith("own-"):
+            return ""
+
+        owner_payload = await self.get_owner(hint)
+        if isinstance(owner_payload, dict):
+            normalized = self._normalize_owner_record(owner_payload)
+            if normalized["workspace_id"]:
+                return normalized["workspace_id"]
+
+        nested_workspace_ids = self._find_prefixed_strings(owner_payload, ("tea-",))
+        return nested_workspace_ids[0] if nested_workspace_ids else ""
+
     async def resolve_owner_id(self, cached_owner_id: str | None = None) -> str:
         fallback_owner_id = (cached_owner_id or self._get_cached_owner_id()).strip()
+        if fallback_owner_id.startswith("tea-"):
+            fallback_workspace_id = fallback_owner_id
+        else:
+            fallback_workspace_id = ""
+            if fallback_owner_id.startswith("own-"):
+                try:
+                    fallback_workspace_id = await self._resolve_workspace_from_hint(fallback_owner_id)
+                except RenderAPIError:
+                    fallback_workspace_id = ""
+
         try:
             owners = await self.list_owners()
         except RenderAPIError:
-            if fallback_owner_id:
+            if fallback_workspace_id:
+                return self._set_cached_owner_id(fallback_workspace_id)
+            if fallback_owner_id.startswith("tea-"):
                 return self._set_cached_owner_id(fallback_owner_id)
             raise
 
-        if not owners:
-            if fallback_owner_id:
-                return self._set_cached_owner_id(fallback_owner_id)
-            raise RenderAPIError("Render owner ID tapılmadı")
+        normalized_owners = [self._normalize_owner_record(owner) for owner in owners]
 
         if fallback_owner_id:
-            for owner in owners:
-                if str(owner.get("id", "")).strip() == fallback_owner_id:
-                    return self._set_cached_owner_id(fallback_owner_id)
+            for owner in normalized_owners:
+                if fallback_owner_id in {
+                    owner["workspace_id"],
+                    owner["user_id"],
+                }:
+                    resolved = owner["workspace_id"] or fallback_workspace_id
+                    if resolved:
+                        return self._set_cached_owner_id(resolved)
 
         scored_owners: list[tuple[int, str]] = []
-        for owner in owners:
-            owner_id = str(owner.get("id", "")).strip()
-            if not owner_id:
+        for owner in normalized_owners:
+            workspace_id = owner["workspace_id"]
+            if not workspace_id:
                 continue
-            score = 0
-            owner_type = str(owner.get("type") or owner.get("ownerType") or "").lower()
-            if owner_type in {"user", "personal", "owner"}:
+
+            score = 10
+            owner_type = owner["type"]
+            if owner_type in {"workspace", "team", "organization"}:
                 score += 4
-            if owner.get("email") or owner.get("ownerEmail"):
+            if owner_type in {"user", "personal", "owner"}:
+                score += 3
+            if owner["email"]:
                 score += 2
-            if owner.get("name"):
+            if owner["name"]:
                 score += 1
-            scored_owners.append((score, owner_id))
+            scored_owners.append((score, workspace_id))
 
-        if not scored_owners:
-            if fallback_owner_id:
-                return self._set_cached_owner_id(fallback_owner_id)
-            raise RenderAPIError("Render owner ID tapılmadı")
+        if scored_owners:
+            scored_owners.sort(key=lambda item: item[0], reverse=True)
+            return self._set_cached_owner_id(scored_owners[0][1])
 
-        scored_owners.sort(key=lambda item: item[0], reverse=True)
-        return self._set_cached_owner_id(scored_owners[0][1])
+        for owner in normalized_owners:
+            user_id = owner["user_id"]
+            if not user_id:
+                continue
+            try:
+                workspace_id = await self._resolve_workspace_from_hint(user_id)
+            except RenderAPIError:
+                continue
+            if workspace_id:
+                return self._set_cached_owner_id(workspace_id)
+
+        if fallback_workspace_id:
+            return self._set_cached_owner_id(fallback_workspace_id)
+
+        raise RenderAPIError("Render workspace ID tapılmadı")
 
     async def list_services(self, owner_id: str | None = None) -> list[dict[str, Any]]:
         params = {}
