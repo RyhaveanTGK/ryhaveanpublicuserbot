@@ -307,8 +307,24 @@ class RenderClient:
     async def trigger_deploy(self, service_id: str) -> dict[str, Any]:
         return await self._request("POST", f"/services/{service_id}/deploys")
 
+    @staticmethod
+    def _sanitize_env_vars(env_vars: list[dict[str, str]] | None) -> list[dict[str, str]]:
+        cleaned: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for item in env_vars or []:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key", "") or "").strip()
+            value = item.get("value")
+            text = value.strip() if isinstance(value, str) else str(value).strip() if value is not None else ""
+            if not key or not text or text.lower() == "none" or key in seen:
+                continue
+            cleaned.append({"key": key, "value": text})
+            seen.add(key)
+        return cleaned
+
     async def replace_env_vars(self, service_id: str, env_vars: list[dict[str, str]]) -> dict[str, Any]:
-        return await self._request("PUT", f"/services/{service_id}/env-vars", json=env_vars)
+        return await self._request("PUT", f"/services/{service_id}/env-vars", json=self._sanitize_env_vars(env_vars))
 
     async def create_service(
         self,
@@ -329,7 +345,7 @@ class RenderClient:
                 "plan": settings.render_default_plan,
                 "region": settings.render_default_region,
                 "pullRequestPreviewsEnabled": "no",
-                "envVars": env_vars,
+                "envVars": self._sanitize_env_vars(env_vars),
             },
         }
         return await self._request("POST", "/services", json=payload, timeout=90.0)
