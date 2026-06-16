@@ -92,21 +92,47 @@ def _resolve_service_id(user: dict[str, Any] | None, state: DeploymentState | No
 
 
 
+def _normalize_env_value(key: str, value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+
+    text = str(value).strip()
+    if not text or text.lower() == "none":
+        return ""
+
+    if key in {"API_ID", "OWNER_ID"}:
+        try:
+            if int(text) <= 0:
+                return ""
+        except (TypeError, ValueError):
+            return ""
+
+    return text
+
+
 def build_env_vars(telegram_id: int, credentials: dict[str, Any], service_url: str = "") -> list[dict[str, str]]:
     app_base_url = credentials.get("app_base_url") or service_url
     values = {
-        "API_ID": str(credentials["api_id"]),
-        "API_HASH": credentials["api_hash"],
-        "SESSION_STRING": credentials["session_string"],
+        "API_ID": credentials.get("api_id"),
+        "API_HASH": credentials.get("api_hash"),
+        "SESSION_STRING": credentials.get("session_string"),
         "MONGODB_URI": credentials.get("mongodb_uri") or settings.mongodb_uri,
         "MONGODB_DB": f"ryhavean_userbot_{telegram_id}",
-        "OWNER_ID": str(telegram_id),
+        "OWNER_ID": telegram_id,
         "CMD_PREFIX": credentials.get("cmd_prefix", "."),
         "UPTIME_ENABLED": "1",
         "UPTIME_INTERVAL_SECONDS": "240",
         "APP_BASE_URL": app_base_url,
     }
-    return [{"key": key, "value": value} for key, value in values.items() if value != ""]
+
+    env_vars: list[dict[str, str]] = []
+    for key, raw_value in values.items():
+        value = _normalize_env_value(key, raw_value)
+        if value:
+            env_vars.append({"key": key, "value": value})
+    return env_vars
 
 
 async def _find_existing_service(
