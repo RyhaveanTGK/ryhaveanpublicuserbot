@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 from dataclasses import dataclass
 from typing import Optional
@@ -76,6 +77,11 @@ async def _ensure_indexes() -> None:
 
     await _database.blocks.create_index(
         [("owner_scope", 1), ("user_id", 1)],
+        unique=True,
+    )
+
+    await _database.plugins.create_index(
+        [("name", 1)],
         unique=True,
     )
 
@@ -295,3 +301,97 @@ async def is_blocked(user_id: int) -> bool:
         return row is not None
 
     return user_id in _blocks
+
+
+async def upsert_plugin(name: str, code: str, *, source_name: str = "", installed_by: int = 0):
+    payload = {
+        "name": name,
+        "code": code,
+        "source_name": source_name or f"{name}.py",
+        "installed_by": int(installed_by or 0),
+        "code_hash": hashlib.sha1(code.encode("utf-8")).hexdigest(),
+    }
+
+    if _mongo_enabled():
+        await _database.plugins.update_one(
+            {"name": name},
+            {
+                "$set": {
+                    **payload,
+                },
+                "$setOnInsert": {"created_at": __import__("datetime").datetime.utcnow()},
+                "$currentDate": {"updated_at": True},
+            },
+            upsert=True,
+        )
+        return payload
+
+    _settings[f"plugin:{name}"] = code
+    _settings[f"plugin_meta:{name}"] = source_name or f"{name}.py"
+    return payload
+
+
+async def get_plugin(name: str):
+    if _mongo_enabled():
+        row = await _database.plugins.find_one({"name": name})
+        if row is None:
+            return None
+        return {
+            "name": str(row.get("name", name)),
+            "code": str(row.get("code", "")),
+            "source_name": str(row.get("source_name", f"{name}.py")),
+            "installed_by": int(row.get("installed_by", 0) or 0),
+            "code_hash": str(row.get("code_hash", "")),
+        }
+
+    code = _settings.get(f"plugin:{name}")
+    if code is None:
+        return None
+    return {
+        "name": name,
+        "code": code,
+        "source_name": _settings.get(f"plugin_meta:{name}", f"{name}.py"),
+        "installed_by": 0,
+        "code_hash": hashlib.sha1(code.encode("utf-8")).hexdigest(),
+    }
+
+
+async def list_plugins():
+    if _mongo_enabled():
+        rows = await _database.plugins.find({}).sort("name", 1).to_list(length=None)
+        return [
+            {
+                "name": str(row.get("name", "")).strip(),
+                "code": str(row.get("code", "")),
+                "source_name": str(row.get("source_name", "")),
+                "installed_by": int(row.get("installed_by", 0) or 0),
+                "code_hash": str(row.get("code_hash", "")),
+            }
+            for row in rows
+            if str(row.get("name", "")).strip()
+        ]
+
+    items = []
+    for key, code in sorted(_settings.items()):
+        if not key.startswith("plugin:") or key.startswith("plugin_meta:"):
+            continue
+        name = key.split(":", 1)[1]
+        items.append({
+            "name": name,
+            "code": code,
+            "source_name": _settings.get(f"plugin_meta:{name}", f"{name}.py"),
+            "installed_by": 0,
+            "code_hash": hashlib.sha1(code.encode("utf-8")).hexdigest(),
+        })
+    return items
+
+
+async def remove_plugin(name: str) -> bool:
+    if _mongo_enabled():
+        result = await _database.plugins.delete_one({"name": name})
+        return result.deleted_count > 0
+
+    existed = f"plugin:{name}" in _settings
+    _settings.pop(f"plugin:{name}", None)
+    _settings.pop(f"plugin_meta:{name}", None)
+    return existed
