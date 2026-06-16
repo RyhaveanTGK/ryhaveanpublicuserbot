@@ -10,6 +10,7 @@ from config import settings
 from render_api import RenderClient, RenderAPIError, slugify_service_name
 
 
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -67,6 +68,7 @@ async def get_state(telegram_id: int) -> dict[str, Any]:
     }
 
 
+
 def build_env_vars(telegram_id: int, credentials: dict[str, Any], service_url: str = "") -> list[dict[str, str]]:
     app_base_url = credentials.get("app_base_url") or service_url
     values = {
@@ -84,6 +86,24 @@ def build_env_vars(telegram_id: int, credentials: dict[str, Any], service_url: s
     return [{"key": key, "value": value} for key, value in values.items() if value != ""]
 
 
+async def _find_existing_service(
+    client: RenderClient,
+    *,
+    owner_id: str,
+    candidate_names: list[str],
+) -> dict[str, Any] | None:
+    normalized_names = {item.strip().lower() for item in candidate_names if item and item.strip()}
+    if not normalized_names:
+        return None
+
+    for service_list in (await client.list_services(owner_id), await client.list_services()):
+        for service in service_list:
+            service_name = str(service.get("name", "")).strip().lower()
+            if service_name and service_name in normalized_names:
+                return service
+    return None
+
+
 async def ensure_service(telegram_id: int, requested_name: str | None = None) -> None:
     credentials = await db.get_decrypted_credentials(telegram_id)
     if not credentials:
@@ -95,40 +115,58 @@ async def ensure_service(telegram_id: int, requested_name: str | None = None) ->
 
     state = DEPLOYMENTS[telegram_id] = DeploymentState(telegram_id=telegram_id, status="starting")
     await db.save_deploy_state(telegram_id, "starting", "Deploy başladıldı")
-    await _log(telegram_id, "info", "Render workspace axtarılır")
+    await _log(telegram_id, "info", "Render owner ID axtarılır")
 
     client = RenderClient(credentials["render_api_key"])
-    workspace = await client.resolve_workspace()
-    owner_id = workspace.get("id", "")
+    owner_id = await client.resolve_owner_id(user.get("owner_id", ""))
     if not owner_id:
-        raise RenderAPIError("Workspace ID tapılmadı")
+        raise RenderAPIError("Render owner ID tapılmadı")
 
-    base_name = requested_name or f"{settings.service_name_prefix}-{telegram_id}"
+    base_name = requested_name or user.get("service_name") or f"{settings.service_name_prefix}-{telegram_id}"
     service_name = slugify_service_name(base_name, f"{settings.service_name_prefix}-{telegram_id}")
+    env_vars = build_env_vars(telegram_id, credentials, user.get("service_url", ""))
 
-    existing_service_id = user.get("service_id", "")
+    existing_service_id = str(user.get("service_id", "") or "").strip()
+    existing_service: dict[str, Any] | None = None
+
+    if existing_service_id:
+        try:
+            existing_service = await client.get_service(existing_service_id)
+            await _log(telegram_id, "info", f"Mövcud service ID tapıldı: {existing_service_id}")
+        except RenderAPIError:
+            await _log(telegram_id, "warning", "Yadda qalan service ID işləmədi, ad ilə fallback axtarışı edilir")
+
+    if existing_service is None:
+        existing_service = await _find_existing_service(
+            client,
+            owner_id=owner_id,
+            candidate_names=[service_name, user.get("service_name", "")],
+        )
+        if existing_service:
+            existing_service_id = str(existing_service.get("id", "") or "").strip()
+            await _log(telegram_id, "info", f"Service ad ilə tapıldı: {existing_service.get('name', service_name)}")
+
     service_payload: dict[str, Any]
 
     if existing_service_id:
-        await _log(telegram_id, "info", "Mövcud service tapıldı, env-lər yenilənir")
-        env_vars = build_env_vars(telegram_id, credentials, user.get("service_url", ""))
+        await _log(telegram_id, "info", "Service mövcuddur, env-lər yenilənir və deploy başladılır")
         await client.replace_env_vars(existing_service_id, env_vars)
         deploy = await client.trigger_deploy(existing_service_id)
         service_payload = await client.get_service(existing_service_id)
+        service_url = service_payload.get("serviceDetails", {}).get("url", "") or user.get("service_url", "")
         await db.save_service_info(
             telegram_id,
             service_id=existing_service_id,
             service_name=service_payload.get("name", service_name),
-            service_url=service_payload.get("serviceDetails", {}).get("url", "") or user.get("service_url", ""),
+            service_url=service_url,
             owner_id=owner_id,
             latest_deploy_id=deploy.get("id", ""),
         )
         state.service_id = existing_service_id
-        state.service_url = service_payload.get("serviceDetails", {}).get("url", "") or user.get("service_url", "")
-        await _log(telegram_id, "success", "Deploy yenidən başladıldı")
+        state.service_url = service_url
+        await _log(telegram_id, "success", "Service yeniləndi və deploy başladı")
     else:
         await _log(telegram_id, "info", f"Yeni Render service yaradılır: {service_name}")
-        env_vars = build_env_vars(telegram_id, credentials)
         service_payload = await client.create_service(owner_id=owner_id, service_name=service_name, env_vars=env_vars)
         service_id = service_payload.get("id", "")
         service_url = service_payload.get("serviceDetails", {}).get("url", "") or service_payload.get("url", "") or ""
@@ -153,6 +191,7 @@ async def watch_service(telegram_id: int, client: RenderClient) -> None:
         raise RuntimeError("Service ID tapılmadı")
 
     service_id = user["service_id"]
+    owner_id = user.get("owner_id", "")
     max_rounds = 60
     last_status = ""
 
@@ -187,7 +226,7 @@ async def watch_service(telegram_id: int, client: RenderClient) -> None:
                 service_id=service_id,
                 service_name=service.get("name", user.get("service_name", "")),
                 service_url=state.service_url,
-                owner_id=user.get("owner_id", ""),
+                owner_id=user.get("owner_id", "") or owner_id,
                 latest_deploy_id=deploy.get("id", ""),
             )
             await _log(telegram_id, "success", "Userbot servis hazırdır")
