@@ -82,6 +82,20 @@ def _default_local_plugin_dir() -> str:
     return str((BASE_DIR / "plugins").resolve())
 
 
+def _default_plugin_mongodb_uri() -> str:
+    explicit = _getenv_str("PLUGIN_MONGODB_URI")
+    if explicit:
+        return explicit
+    return _getenv_str("MONGODB_URI")
+
+
+def _default_plugin_mongodb_db() -> str:
+    explicit = _getenv_str("PLUGIN_MONGODB_DB")
+    if explicit:
+        return explicit
+    return "ryhavean_shared_plugins"
+
+
 def _detect_public_base_url() -> str:
     candidates = [
         _getenv_str("APP_BASE_URL"),
@@ -117,6 +131,8 @@ class Config:
 
     MONGODB_URI = _getenv_str("MONGODB_URI")
     MONGODB_DB = _getenv_str("MONGODB_DB", "ryhavean_userbot") or "ryhavean_userbot"
+    PLUGIN_MONGODB_URI = _default_plugin_mongodb_uri()
+    PLUGIN_MONGODB_DB = _default_plugin_mongodb_db()
 
     APP_BASE_URL = _detect_public_base_url()
     UPTIME_URL = _getenv_str("UPTIME_URL")
