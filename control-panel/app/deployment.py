@@ -115,12 +115,12 @@ async def ensure_service(telegram_id: int, requested_name: str | None = None) ->
 
     state = DEPLOYMENTS[telegram_id] = DeploymentState(telegram_id=telegram_id, status="starting")
     await db.save_deploy_state(telegram_id, "starting", "Deploy başladıldı")
-    await _log(telegram_id, "info", "Render owner ID axtarılır")
+    await _log(telegram_id, "info", "Render workspace ID axtarılır")
 
     client = RenderClient(credentials["render_api_key"])
     owner_id = await client.resolve_owner_id(user.get("owner_id", ""))
     if not owner_id:
-        raise RenderAPIError("Render owner ID tapılmadı")
+        raise RenderAPIError("Render workspace ID tapılmadı")
 
     base_name = requested_name or user.get("service_name") or f"{settings.service_name_prefix}-{telegram_id}"
     service_name = slugify_service_name(base_name, f"{settings.service_name_prefix}-{telegram_id}")
