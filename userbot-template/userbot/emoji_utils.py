@@ -4,7 +4,7 @@
 ==================================================
 Bütün send_message / edit_message / respond / reply / send_file
 metodlarına class-level monkey-patch tətbiq edir.
-GitHub runtime ilə yüklənən pluginlər də avtomatik premium emoji göstərir.
+.pinstall ilə yüklənən pluginlər də avtomatik premium emoji göstərir.
 
 ✅ DÜZƏLİŞ: HTML teqlər (<b>, <code>) artıq düzgün render olunur!
 ==================================================
@@ -256,114 +256,241 @@ PREMIUM_EMOJI_MAP = {
     "🇷🇺": 5398017006165305287,
 }
 
+# .song üçün random premium emoji ID'lər
+SONG_PREMIUM_EMOJI_IDS = [
+    5244489483159609086,  # 🎵
+    5411371652921435502,  # 🎶
+    5363988860747400777,  # 🎧
+]
+SONG_EMOJI_CHAR = ["🎵", "🎶", "🎧"]
 
 
-def _maybe_replace_emoji(text: str):
-    entities = []
-    new_text = []
-    i = 0
-    while i < len(text):
-        replaced = False
-        for emoji_char, doc_id in PREMIUM_EMOJI_MAP.items():
-            if text.startswith(emoji_char, i):
-                offset = len("".join(new_text))
-                new_text.append(emoji_char)
-                entities.append(MessageEntityCustomEmoji(offset=offset, length=len(emoji_char), document_id=doc_id))
-                i += len(emoji_char)
-                replaced = True
+# ============================================================
+# Premium Emoji konvertasiya alqoritmi (DÜZƏLDILMIŞ)
+# ============================================================
+def _build_premium_emoji_entities(text: str, html_entities: list):
+    """
+    Parse olunmuş text üzərində premium emoji entity-lər yaradır.
+    HTML entities ilə qarışdırmır.
+    """
+    if not text:
+        return []
+    
+    sorted_emojis = sorted(PREMIUM_EMOJI_MAP.keys(), key=len, reverse=True)
+    pattern = "|".join(re.escape(e) for e in sorted_emojis)
+    
+    def utf16_len(s):
+        return len(s.encode("utf-16-le")) // 2
+
+    emoji_entities = []
+    
+    for m in re.finditer(pattern, text):
+        emoji_char = m.group(0)
+        emoji_id = PREMIUM_EMOJI_MAP.get(emoji_char)
+        if not emoji_id:
+            continue
+        
+        offset = utf16_len(text[: m.start()])
+        length = utf16_len(emoji_char)
+        
+        # Yoxla ki, bu offset artıq HTML entity tərəfindən tutulmayıb
+        is_overlap = False
+        for ent in html_entities:
+            ent_start = ent.offset
+            ent_end = ent.offset + ent.length
+            if offset < ent_end and (offset + length) > ent_start:
+                is_overlap = True
                 break
-        if not replaced:
-            new_text.append(text[i])
-            i += 1
-    return "".join(new_text), entities
+        
+        if not is_overlap:
+            emoji_entities.append(
+                MessageEntityCustomEmoji(
+                    offset=offset,
+                    length=length,
+                    document_id=emoji_id,
+                )
+            )
+    
+    return emoji_entities
 
 
-def _inject_entities(text: str, entities=None, parse_mode=None):
-    if parse_mode == "html":
-        text, html_entities = tl_html.parse(text)
-        base_entities = html_entities or []
-    else:
-        base_entities = entities or []
-    new_text, emoji_entities = _maybe_replace_emoji(text)
-    all_entities = list(base_entities) + emoji_entities
-    all_entities.sort(key=lambda e: getattr(e, "offset", 0))
-    return new_text, all_entities
+def apply_premium_emojis(text, existing_entities=None, parse_mode=None):
+    """
+    HTML teqlərini parse edib, premium emoji entity-ləri əlavə edir.
+    
+    Args:
+        text: Mesaj mətni (HTML teqləri ola bilər)
+        existing_entities: Artıq mövcud entity-lər
+        parse_mode: 'html' və ya None
+    
+    Returns:
+        (parsed_text, combined_entities)
+    """
+    if not text:
+        return text, existing_entities or []
+    
+    # Əgər parse_mode='html' varsa, HTML-i parse edirik
+    html_entities = []
+    parsed_text = text
+    
+    if parse_mode == 'html' or (not existing_entities and '<' in text):
+        try:
+            # Telethon-un HTML parser-i istifadə et
+            parsed_text, html_entities = tl_html.parse(text)
+        except Exception:
+            # Parse xətası olarsa, sadəcə text-i saxla
+            parsed_text = text
+            html_entities = []
+    
+    # Artıq entity-lər varsa, onları əlavə et
+    if existing_entities:
+        html_entities = list(existing_entities) + html_entities
+    
+    # İndi premium emoji entity-lər əlavə et
+    emoji_entities = _build_premium_emoji_entities(parsed_text, html_entities)
+    
+    # Bütün entity-ləri birləşdir
+    all_entities = html_entities + emoji_entities
+    
+    return parsed_text, all_entities
 
 
-async def _patched_send_message(self, entity, message='', *args, **kwargs):
+# ============================================================
+# CLASS-LEVEL MONKEY PATCH (DÜZƏLDILMIŞ)
+# ============================================================
+_original_send_message = TelegramClient.send_message
+_original_edit_message = TelegramClient.edit_message
+_original_send_file = TelegramClient.send_file
+
+async def _patched_send_message(self, entity, message=None, *args, **kwargs):
     if isinstance(message, str):
-        parse_mode = kwargs.get('parse_mode')
-        text, entities = _inject_entities(message, kwargs.get('entities'), parse_mode)
-        kwargs.pop('parse_mode', None)
-        kwargs['formatting_entities'] = entities
-        message = text
-    return await _orig_send_message(self, entity, message, *args, **kwargs)
+        parse_mode = kwargs.get("parse_mode")
+        existing_ents = kwargs.get("formatting_entities")
+        
+        new_text, combined_ents = apply_premium_emojis(
+            message, 
+            existing_ents, 
+            parse_mode
+        )
+        
+        if combined_ents:
+            kwargs["formatting_entities"] = combined_ents
+            kwargs.pop("parse_mode", None)  # parse_mode-u silirik
+            message = new_text
+    
+    return await _original_send_message(self, entity, message, *args, **kwargs)
 
+async def _patched_edit_message(self, entity, message=None, text=None, *args, **kwargs):
+    target_text = text if text else message
+    
+    if isinstance(target_text, str):
+        parse_mode = kwargs.get("parse_mode")
+        existing_ents = kwargs.get("formatting_entities")
+        
+        new_text, combined_ents = apply_premium_emojis(
+            target_text,
+            existing_ents,
+            parse_mode
+        )
+        
+        if combined_ents:
+            kwargs["formatting_entities"] = combined_ents
+            kwargs.pop("parse_mode", None)
+            if text:
+                text = new_text
+            else:
+                message = new_text
+    
+    return await _original_edit_message(self, entity, message, text, *args, **kwargs)
 
-async def _patched_edit(self, *args, **kwargs):
-    if args:
-        message = args[0]
-        rest = args[1:]
-    else:
-        message = kwargs.get('text') or kwargs.get('message') or ''
-        rest = ()
+async def _patched_send_file(self, entity, file, *args, **kwargs):
+    caption = kwargs.get("caption")
+    
+    if isinstance(caption, str):
+        parse_mode = kwargs.get("parse_mode")
+        existing_ents = kwargs.get("formatting_entities")
+        
+        new_text, combined_ents = apply_premium_emojis(
+            caption,
+            existing_ents,
+            parse_mode
+        )
+        
+        if combined_ents:
+            kwargs["formatting_entities"] = combined_ents
+            kwargs.pop("parse_mode", None)
+            kwargs["caption"] = new_text
+    
+    return await _original_send_file(self, entity, file, *args, **kwargs)
+
+_original_message_edit = Message.edit
+_original_message_respond = Message.respond
+_original_message_reply = Message.reply
+
+async def _patched_message_edit(self, text=None, *args, **kwargs):
+    if isinstance(text, str):
+        parse_mode = kwargs.get("parse_mode")
+        existing_ents = kwargs.get("formatting_entities")
+        
+        new_text, combined_ents = apply_premium_emojis(
+            text,
+            existing_ents,
+            parse_mode
+        )
+        
+        if combined_ents:
+            kwargs["formatting_entities"] = combined_ents
+            kwargs.pop("parse_mode", None)
+            text = new_text
+    
+    return await _original_message_edit(self, text, *args, **kwargs)
+
+async def _patched_message_respond(self, message=None, *args, **kwargs):
     if isinstance(message, str):
-        parse_mode = kwargs.get('parse_mode')
-        text, entities = _inject_entities(message, kwargs.get('entities'), parse_mode)
-        kwargs.pop('parse_mode', None)
-        kwargs['formatting_entities'] = entities
-        if args:
-            args = (text, *rest)
-        else:
-            kwargs['text'] = text
-            kwargs.pop('message', None)
-    return await _orig_edit(self, *args, **kwargs)
+        parse_mode = kwargs.get("parse_mode")
+        existing_ents = kwargs.get("formatting_entities")
+        
+        new_text, combined_ents = apply_premium_emojis(
+            message,
+            existing_ents,
+            parse_mode
+        )
+        
+        if combined_ents:
+            kwargs["formatting_entities"] = combined_ents
+            kwargs.pop("parse_mode", None)
+            message = new_text
+    
+    return await _original_message_respond(self, message, *args, **kwargs)
 
-
-async def _patched_respond(self, *args, **kwargs):
-    if args:
-        message = args[0]
-        rest = args[1:]
-    else:
-        message = kwargs.get('message') or ''
-        rest = ()
+async def _patched_message_reply(self, message=None, *args, **kwargs):
     if isinstance(message, str):
-        parse_mode = kwargs.get('parse_mode')
-        text, entities = _inject_entities(message, kwargs.get('entities'), parse_mode)
-        kwargs.pop('parse_mode', None)
-        kwargs['formatting_entities'] = entities
-        if args:
-            args = (text, *rest)
-        else:
-            kwargs['message'] = text
-    return await _orig_respond(self, *args, **kwargs)
+        parse_mode = kwargs.get("parse_mode")
+        existing_ents = kwargs.get("formatting_entities")
+        
+        new_text, combined_ents = apply_premium_emojis(
+            message,
+            existing_ents,
+            parse_mode
+        )
+        
+        if combined_ents:
+            kwargs["formatting_entities"] = combined_ents
+            kwargs.pop("parse_mode", None)
+            message = new_text
+    
+    return await _original_message_reply(self, message, *args, **kwargs)
 
+def install_patches():
+    TelegramClient.send_message = _patched_send_message
+    TelegramClient.edit_message = _patched_edit_message
+    TelegramClient.send_file = _patched_send_file
+    Message.edit = _patched_message_edit
+    Message.respond = _patched_message_respond
+    Message.reply = _patched_message_reply
 
-async def _patched_reply(self, *args, **kwargs):
-    if args:
-        message = args[0]
-        rest = args[1:]
-    else:
-        message = kwargs.get('message') or ''
-        rest = ()
-    if isinstance(message, str):
-        parse_mode = kwargs.get('parse_mode')
-        text, entities = _inject_entities(message, kwargs.get('entities'), parse_mode)
-        kwargs.pop('parse_mode', None)
-        kwargs['formatting_entities'] = entities
-        if args:
-            args = (text, *rest)
-        else:
-            kwargs['message'] = text
-    return await _orig_reply(self, *args, **kwargs)
+def vip_format(text: str, auto_bold: bool = True) -> str:
+    parsed_text, _ = apply_premium_emojis(text, parse_mode='html')
+    return parsed_text
 
-
-_orig_send_message = TelegramClient.send_message
-_orig_edit = Message.edit
-_orig_respond = Message.respond
-_orig_reply = Message.reply
-
-TelegramClient.send_message = _patched_send_message
-Message.edit = _patched_edit
-Message.respond = _patched_respond
-Message.reply = _patched_reply
+install_patches()
