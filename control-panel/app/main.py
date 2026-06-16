@@ -25,15 +25,23 @@ STATIC_DIR = BASE_DIR / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await db.connect_db()
-    await start_bot_polling()
     try:
-        yield
-    finally:
-        for task in list(DEPLOYMENTS.values()):
-            _ = task
+        await db.connect_db()
+    except Exception as e:
+        log.error(f"DB error: {e}")
+
+    try:
+        await start_bot_polling()
+    except Exception as e:
+        log.error(f"Bot error: {e}")
+
+    yield
+
+    try:
         await stop_bot_polling()
         await db.close_db()
+    except Exception:
+        pass
 
 
 app = FastAPI(title="Ryhavean Control Panel", version="1.0.0", lifespan=lifespan)
