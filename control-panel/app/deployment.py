@@ -69,6 +69,29 @@ async def get_state(telegram_id: int) -> dict[str, Any]:
 
 
 
+def _extract_service_id(payload: dict[str, Any] | None) -> str:
+    payload = payload or {}
+    return str(
+        payload.get("id")
+        or payload.get("serviceId")
+        or payload.get("service", {}).get("id")
+        or payload.get("serviceDetails", {}).get("id")
+        or ""
+    ).strip()
+
+
+
+def _resolve_service_id(user: dict[str, Any] | None, state: DeploymentState | None, fallback: str = "") -> str:
+    state_service_id = str(getattr(state, "service_id", "") or "").strip()
+    if state_service_id:
+        return state_service_id
+    user_service_id = str((user or {}).get("service_id", "") or "").strip()
+    if user_service_id:
+        return user_service_id
+    return str(fallback or "").strip()
+
+
+
 def build_env_vars(telegram_id: int, credentials: dict[str, Any], service_url: str = "") -> list[dict[str, str]]:
     app_base_url = credentials.get("app_base_url") or service_url
     values = {
@@ -149,11 +172,13 @@ async def ensure_service(telegram_id: int, requested_name: str | None = None) ->
     service_payload: dict[str, Any]
 
     if existing_service_id:
+        state.service_id = existing_service_id
         await _log(telegram_id, "info", "Service mövcuddur, env-lər yenilənir və deploy başladılır")
         await client.replace_env_vars(existing_service_id, env_vars)
         deploy = await client.trigger_deploy(existing_service_id)
         service_payload = await client.get_service(existing_service_id)
         service_url = service_payload.get("serviceDetails", {}).get("url", "") or user.get("service_url", "")
+        state.service_url = service_url
         await db.save_service_info(
             telegram_id,
             service_id=existing_service_id,
@@ -162,14 +187,14 @@ async def ensure_service(telegram_id: int, requested_name: str | None = None) ->
             owner_id=owner_id,
             latest_deploy_id=deploy.get("id", ""),
         )
-        state.service_id = existing_service_id
-        state.service_url = service_url
         await _log(telegram_id, "success", "Service yeniləndi və deploy başladı")
     else:
         await _log(telegram_id, "info", f"Yeni Render service yaradılır: {service_name}")
         service_payload = await client.create_service(owner_id=owner_id, service_name=service_name, env_vars=env_vars)
-        service_id = service_payload.get("id", "")
+        service_id = _extract_service_id(service_payload)
         service_url = service_payload.get("serviceDetails", {}).get("url", "") or service_payload.get("url", "") or ""
+        state.service_id = service_id
+        state.service_url = service_url
         await db.save_service_info(
             telegram_id,
             service_id=service_id,
@@ -178,31 +203,49 @@ async def ensure_service(telegram_id: int, requested_name: str | None = None) ->
             owner_id=owner_id,
             latest_deploy_id=service_payload.get("suspendedDeploy", {}).get("id", "") or service_payload.get("deploy", {}).get("id", ""),
         )
-        state.service_id = service_id
-        state.service_url = service_url
         await _log(telegram_id, "success", "Service yaradıldı")
 
-    await watch_service(telegram_id, client)
+async def watch_service(telegram_id: int, client: RenderClient, service_id: str = "") -> None:
+    user = await db.get_user(telegram_id) or {}
 
+    state = DEPLOYMENTS.get(telegram_id)
 
-async def watch_service(telegram_id: int, client: RenderClient) -> None:
-    user = await db.get_user(telegram_id)
-    if not user or not user.get("service_id"):
+    # SAFE fallback
+    if not service_id:
+        service_id = _resolve_service_id(user, state)
+
+    if not service_id:
         raise RuntimeError("Service ID tapılmadı")
 
-    service_id = user["service_id"]
     owner_id = user.get("owner_id", "")
     max_rounds = 60
     last_status = ""
 
+    state = DEPLOYMENTS.setdefault(
+        telegram_id,
+        DeploymentState(telegram_id=telegram_id, status="deploying")
+    )
+
+    state.service_id = service_id
+
     for _ in range(max_rounds):
         service = await client.get_service(service_id)
-        state = DEPLOYMENTS.setdefault(telegram_id, DeploymentState(telegram_id=telegram_id, status="deploying"))
+
+        state = DEPLOYMENTS.setdefault(
+            telegram_id,
+            DeploymentState(telegram_id=telegram_id, status="deploying")
+        )
+
         state.service_id = service_id
-        state.service_url = service.get("serviceDetails", {}).get("url", "") or user.get("service_url", "") or ""
+        state.service_url = (
+            service.get("serviceDetails", {}).get("url", "")
+            or user.get("service_url", "")
+            or ""
+        )
 
         deploys = await client.list_deploys(service_id, limit=1)
         deploy = deploys[0] if deploys else {}
+
         status = (
             deploy.get("status")
             or service.get("serviceDetails", {}).get("buildStatus")
@@ -210,6 +253,7 @@ async def watch_service(telegram_id: int, client: RenderClient) -> None:
             or service.get("suspended")
             or "unknown"
         )
+
         status_text = str(status)
 
         if status_text != last_status:
@@ -217,10 +261,13 @@ async def watch_service(telegram_id: int, client: RenderClient) -> None:
             await _log(telegram_id, "info", f"Cari status: {status_text}")
 
         normalized = status_text.lower()
+
         if any(word in normalized for word in ("live", "running", "deployed", "success")):
             state.status = "live"
             state.summary = "Deploy uğurla tamamlandı"
-            await db.save_deploy_state(telegram_id, "live", "Deploy uğurla tamamlandı")
+
+            await db.save_deploy_state(telegram_id, "live", state.summary)
+
             await db.save_service_info(
                 telegram_id,
                 service_id=service_id,
@@ -229,23 +276,32 @@ async def watch_service(telegram_id: int, client: RenderClient) -> None:
                 owner_id=user.get("owner_id", "") or owner_id,
                 latest_deploy_id=deploy.get("id", ""),
             )
+
             await _log(telegram_id, "success", "Userbot servis hazırdır")
             return
 
         if any(word in normalized for word in ("failed", "canceled", "cancelled")):
             state.status = "failed"
             state.summary = f"Deploy alınmadı: {status_text}"
+
             await db.save_deploy_state(telegram_id, "failed", state.summary)
             await _log(telegram_id, "error", state.summary)
             return
 
         state.status = "deploying"
         state.summary = f"Deploy davam edir: {status_text}"
+
         await db.save_deploy_state(telegram_id, "deploying", state.summary)
+
         await asyncio.sleep(settings.poll_interval_seconds)
 
-    state = DEPLOYMENTS.setdefault(telegram_id, DeploymentState(telegram_id=telegram_id))
+    state = DEPLOYMENTS.setdefault(
+        telegram_id,
+        DeploymentState(telegram_id=telegram_id)
+    )
+
     state.status = "pending"
     state.summary = "Render build hələ davam edir, sonra statusu yenilə"
+
     await db.save_deploy_state(telegram_id, "pending", state.summary)
     await _log(telegram_id, "warning", state.summary)
