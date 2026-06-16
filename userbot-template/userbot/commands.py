@@ -426,7 +426,7 @@ def register(client):
     async def pluginsync(event):
         if not await rl_check(event, "pluginsync", limit=2, per=30):
             return
-        await edit_safe(event, "🔄 MongoDB-də saxlanan pluginlər yenidən yüklənir...")
+        await edit_safe(event, "🔄 Ortak plugin deposundakı pluginlər yenidən yüklənir...")
         summary = await plugin_loader.manual_update(event.client)
         text = (
             "✅ Pluginlər yeniləndi.\n"
@@ -470,6 +470,7 @@ def register(client):
                 event,
                 (
                     f"✅ Plugin quraşdırıldı: <code>{plugin_name}</code>\n"
+                    "Bu plugin artıq ümumi depoda saxlanıldı. Digər userbotlar <code>.pluginsync</code> ilə yükləyə bilər.\n"
                     f"Komandalar: {plugin_loader.extract_commands(code)}"
                 ),
             )
@@ -497,7 +498,7 @@ def register(client):
 
         removed = await plugin_loader.uninstall_plugin(event.client, plugin_name)
         if removed:
-            await edit_safe(event, f"🗑 Plugin silindi: <code>{plugin_name}</code>")
+            await edit_safe(event, f"🗑 Plugin silindi: <code>{plugin_name}</code>\nDigər userbotlarda dəyişiklik <code>.pluginsync</code> ilə tətbiq olunacaq.")
         else:
             await edit_safe(event, f"ℹ️ Plugin tapılmadı: <code>{plugin_name}</code>")
 
