@@ -24,7 +24,7 @@ class TelegramCodeRequest(InitDataRequest):
 
 
 class TelegramVerifyCodeRequest(InitDataRequest):
-    code: str = Field(..., min_length=3, max_length=10)
+    code: str = Field(..., min_length=3, max_length=16)
     password: str | None = None
 
 
