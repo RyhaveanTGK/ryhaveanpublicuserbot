@@ -124,6 +124,7 @@ async def save_phone_login_session(
     api_hash: str,
     phone_number: str,
     phone_code_hash: str,
+    auth_session: str,
 ) -> None:
     await database().telegram_auth_sessions.update_one(
         {"telegram_id": telegram_id},
@@ -134,6 +135,7 @@ async def save_phone_login_session(
                 "api_hash": encrypt_text(api_hash),
                 "phone_number": phone_number,
                 "phone_code_hash": phone_code_hash,
+                "auth_session": encrypt_text(auth_session),
                 "created_at": utcnow(),
                 "expires_at": utcnow() + timedelta(minutes=_LOGIN_SESSION_TTL_MINUTES),
             }
@@ -152,6 +154,7 @@ async def get_phone_login_session(telegram_id: int) -> dict[str, Any] | None:
         "api_hash": decrypt_text(row.get("api_hash")),
         "phone_number": row.get("phone_number", ""),
         "phone_code_hash": row.get("phone_code_hash", ""),
+        "auth_session": decrypt_text(row.get("auth_session")) if row.get("auth_session") else "",
         "expires_at": row.get("expires_at"),
     }
 
