@@ -103,8 +103,8 @@ async def init_db():
         return True
 
     if not Config.MONGODB_URI:
-        log.warning("MONGODB_URI env tapılmadı, in-memory mode aktivdir")
-        return True
+        log.warning("MONGODB_URI env tapılmadı, persistent DB fallback əlçatan deyil")
+        return False
 
     try:
         _client = AsyncIOMotorClient(
@@ -124,7 +124,7 @@ async def init_db():
         log.info("✅ MongoDB qoşuldu: db=%s", Config.MONGODB_DB)
         return True
 
-    except Exception as exc:
+    except Exception:
         log.exception("MongoDB bağlantı xətası")
 
         _database = None
@@ -133,8 +133,7 @@ async def init_db():
             _client.close()
 
         _client = None
-
-        raise RuntimeError(f"MongoDB bağlantısı alınmadı: {exc}") from exc
+        return False
 
 
 async def close_db():
@@ -179,6 +178,38 @@ async def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
         return row.get("value", default)
 
     return _settings.get(key, default)
+
+
+async def save_bootstrap_config(config_map: dict[str, object]) -> None:
+    payload = {
+        "bootstrap_api_id": str(int(config_map.get("api_id", 0) or 0)),
+        "bootstrap_api_hash": str(config_map.get("api_hash", "") or "").strip(),
+        "bootstrap_session_string": str(config_map.get("session_string", "") or "").strip(),
+        "bootstrap_mongodb_uri": str(config_map.get("mongodb_uri", "") or "").strip(),
+        "bootstrap_mongodb_db": str(config_map.get("mongodb_db", "") or "").strip(),
+        "bootstrap_owner_id": str(int(config_map.get("owner_id", 0) or 0)),
+        "bootstrap_cmd_prefix": str(config_map.get("cmd_prefix", ".") or ".").strip() or ".",
+    }
+    for key, value in payload.items():
+        if value:
+            await set_setting(key, value)
+
+
+async def get_bootstrap_config() -> dict[str, str]:
+    return {
+        "api_id": await get_setting("bootstrap_api_id", "0") or "0",
+        "api_hash": await get_setting("bootstrap_api_hash", "") or "",
+        "session_string": await get_setting("bootstrap_session_string", "") or "",
+        "mongodb_uri": await get_setting("bootstrap_mongodb_uri", "") or "",
+        "mongodb_db": await get_setting("bootstrap_mongodb_db", Config.MONGODB_DB) or Config.MONGODB_DB,
+        "owner_id": await get_setting("bootstrap_owner_id", "0") or "0",
+        "cmd_prefix": await get_setting("bootstrap_cmd_prefix", ".") or ".",
+    }
+
+
+async def set_runtime_status(status: str, summary: str = "") -> None:
+    await set_setting("runtime_status", status)
+    await set_setting("runtime_summary", summary)
 
 
 async def save_welcome(chat_id: int, message: str):
