@@ -28,3 +28,4 @@ aiohttp>=3.10.5
 requests>=2.32.3
 psutil>=6.0.0
 humanize>=4.10.0
+aiogram
