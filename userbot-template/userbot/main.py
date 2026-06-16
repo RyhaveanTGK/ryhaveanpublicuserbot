@@ -11,6 +11,7 @@ import emoji_utils  # noqa: F401
 import httpx
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
@@ -29,6 +30,9 @@ log = logging.getLogger("ryhavean")
 
 tg_client: TelegramClient | None = None
 keepalive_task: asyncio.Task | None = None
+
+
+HEALTH_HEADERS = {"Cache-Control": "no-store"}
 
 
 def _install_extra_emoji_patches():
@@ -76,6 +80,7 @@ def _install_extra_emoji_patches():
 _install_extra_emoji_patches()
 
 
+
 def get_session_string() -> str:
     raw = Config.SESSION_STRING
     if not raw:
@@ -88,6 +93,7 @@ def get_session_string() -> str:
             log.critical("Session deşifrə xətası: %s", exc)
             sys.exit(1)
     return raw
+
 
 
 def _resolve_keepalive_url() -> str:
@@ -111,6 +117,7 @@ async def _keepalive_loop(url: str):
             except Exception as exc:
                 log.warning("Keepalive ping xətası (%s): %s", url, exc)
             await asyncio.sleep(Config.UPTIME_INTERVAL_SECONDS)
+
 
 
 def start_keepalive_task() -> asyncio.Task | None:
@@ -216,25 +223,17 @@ async def lifespan(app: FastAPI):
         await db.close_db()
 
 
-app = FastAPI(title="Ryhavean Userbot", version="2.2.0", lifespan=lifespan)
-from fastapi.responses import PlainTextResponse
+app = FastAPI(title="Ryhavean Userbot", version="2.3.0", lifespan=lifespan)
 
 
-
-@app.api_route("/uptime", methods=["GET", "HEAD"])
-async def uptime():
-    return PlainTextResponse("ok")
-
+@app.api_route("/uptime", methods=["GET", "HEAD"], response_class=PlainTextResponse)
+def uptime():
+    return PlainTextResponse("ok", headers=HEALTH_HEADERS)
 
 
-
-
-@app.get("/health")
-async def health():
-    return {"status": "healthy" if tg_client and tg_client.is_connected() else "starting"}
-
-
-
+@app.api_route("/health", methods=["GET", "HEAD"], response_class=PlainTextResponse)
+def health():
+    return PlainTextResponse("ok", headers=HEALTH_HEADERS)
 
 
 if __name__ == "__main__":
