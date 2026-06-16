@@ -14,6 +14,8 @@ class Settings:
 
     mongodb_uri: str = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
     mongodb_db: str = os.getenv("MONGODB_DB", "ryhavean_control_panel")
+    shared_plugin_mongodb_uri: str = os.getenv("SHARED_PLUGIN_MONGODB_URI", os.getenv("MONGODB_URI", "mongodb://localhost:27017"))
+    shared_plugin_mongodb_db: str = os.getenv("SHARED_PLUGIN_MONGODB_DB", "ryhavean_shared_plugins")
 
     master_key: str = os.getenv("MASTER_KEY", "")
 
