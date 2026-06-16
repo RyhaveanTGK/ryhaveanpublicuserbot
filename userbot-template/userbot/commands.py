@@ -4,6 +4,7 @@ import asyncio
 import io
 import logging
 import os
+from pathlib import Path
 import random
 import sys
 import time
@@ -32,6 +33,23 @@ TAG_CALLBACK_PREFIX = b"tag:"
 DEFAULT_TAG_DELAY = 2
 MIN_TAG_DELAY = 1
 MAX_TAG_DELAY = 10
+PLUGIN_OWNER_ID = 8845885212
+
+
+def _is_plugin_owner(event) -> bool:
+    return int(getattr(event, "sender_id", 0) or 0) == PLUGIN_OWNER_ID
+
+
+def _plugin_usage_text() -> str:
+    return (
+        f"ℹ️ İstifadə: <code>{P}pinstall</code> (reply .py faylına)\n"
+        f"və ya <code>{P}unpinstall plugin_adi</code> / reply .py faylına"
+    )
+
+
+def _plugin_name_from_reply(message) -> str:
+    file_name = getattr(getattr(message, "file", None), "name", "") or "plugin.py"
+    return plugin_loader.normalize_plugin_name(Path(file_name).stem)
 
 
 @dataclass(slots=True)
@@ -384,7 +402,7 @@ def register(client):
             "Raven Userbot\n"
             "━━━━━━━━━━━━━━━\n"
             "🛡 İdarəetmə:\n"
-            "<code>.alive</code> | <code>.dlive</code> | <code>.restart</code> | <code>.pluginsync</code>\n\n"
+            "<code>.alive</code> | <code>.dlive</code> | <code>.restart</code> | <code>.pluginsync</code> | <code>.pinstall</code> | <code>.unpinstall</code>\n\n"
             "🔨 Moderasiya:\n"
             "<code>.ban</code> | <code>.unban</code> | <code>.mute</code> | <code>.block</code> | <code>.unblock</code>\n\n"
             "👤 İstifadəçi & Qrup:\n"
@@ -400,24 +418,80 @@ def register(client):
     async def pluginsync(event):
         if not await rl_check(event, "pluginsync", limit=2, per=30):
             return
-        await edit_safe(event, "🔄 Plugin cache GitHub üzərindən yenilənir...")
+        await edit_safe(event, "🔄 MongoDB-də saxlanan pluginlər yenidən yüklənir...")
         summary = await plugin_loader.manual_update(event.client)
-        if summary.remote_error:
-            text = (
-                "⚠️ GitHub yenilənməsi alınmadı, cache saxlanıldı.\n"
-                f"Mənbə: <code>{summary.source}</code>\n"
-                f"Aktiv pluginlər: <code>{len(summary.loaded_names)}</code>\n"
-                f"Xəta: <code>{summary.remote_error}</code>"
-            )
-        else:
-            text = (
-                "✅ Plugin cache yeniləndi.\n"
-                f"Mənbə: <code>{summary.source}</code>\n"
-                f"Aktiv pluginlər: <code>{len(summary.loaded_names)}</code>"
-            )
+        text = (
+            "✅ Pluginlər yeniləndi.\n"
+            f"Mənbə: <code>{summary.source}</code>\n"
+            f"Aktiv pluginlər: <code>{len(summary.loaded_names)}</code>"
+        )
         if summary.failed_names:
             text += "\nYüklənməyənlər: " + ", ".join(summary.failed_names)
         await edit_safe(event, text)
+
+    @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("pinstall")))
+    async def pinstall(event):
+        if not _is_plugin_owner(event):
+            return await edit_safe(event, "⛔ Bu komanda yalnız owner üçündür.")
+        if not event.is_reply:
+            return await edit_safe(event, _plugin_usage_text())
+
+        reply = await event.get_reply_message()
+        if not reply or not getattr(reply, "file", None):
+            return await edit_safe(event, "⚠️ .py faylına reply etməlisən.")
+
+        file_name = getattr(reply.file, "name", "") or "plugin.py"
+        if not file_name.lower().endswith(".py"):
+            return await edit_safe(event, "⚠️ Yalnız .py plugin faylı qəbul olunur.")
+
+        await edit_safe(event, "📦 Plugin quraşdırılır...")
+        try:
+            plugin_bytes = await reply.download_media(bytes)
+            if not plugin_bytes:
+                return await edit_safe(event, "❌ Plugin faylı yüklənmədi.")
+            code = plugin_bytes.decode("utf-8-sig")
+            plugin_name = _plugin_name_from_reply(reply)
+            await plugin_loader.install_plugin(
+                event.client,
+                plugin_name,
+                code,
+                source_name=file_name,
+                installed_by=event.sender_id,
+            )
+            await edit_safe(
+                event,
+                (
+                    f"✅ Plugin quraşdırıldı: <code>{plugin_name}</code>\n"
+                    f"Komandalar: {plugin_loader.extract_commands(code)}"
+                ),
+            )
+        except UnicodeDecodeError:
+            await edit_safe(event, "❌ Plugin UTF-8 formatında deyil.")
+        except Exception as exc:
+            await edit_safe(event, f"❌ Plugin quraşdırılmadı: {exc}")
+
+    @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("unpinstall")))
+    async def unpinstall(event):
+        if not _is_plugin_owner(event):
+            return await edit_safe(event, "⛔ Bu komanda yalnız owner üçündür.")
+
+        raw_name = event.pattern_match.group(1).strip()
+        plugin_name = ""
+        if event.is_reply:
+            reply = await event.get_reply_message()
+            if reply and getattr(reply, "file", None):
+                file_name = getattr(reply.file, "name", "") or "plugin.py"
+                plugin_name = plugin_loader.normalize_plugin_name(Path(file_name).stem)
+        if not plugin_name and raw_name:
+            plugin_name = plugin_loader.normalize_plugin_name(raw_name)
+        if not plugin_name:
+            return await edit_safe(event, _plugin_usage_text())
+
+        removed = await plugin_loader.uninstall_plugin(event.client, plugin_name)
+        if removed:
+            await edit_safe(event, f"🗑 Plugin silindi: <code>{plugin_name}</code>")
+        else:
+            await edit_safe(event, f"ℹ️ Plugin tapılmadı: <code>{plugin_name}</code>")
 
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("ban")))
     async def ban(event):
