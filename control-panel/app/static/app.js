@@ -15,11 +15,19 @@ const els = {
   form: document.getElementById("credentialForm"),
   deployBtn: document.getElementById("deployBtn"),
   refreshBtn: document.getElementById("refreshBtn"),
+  sendCodeBtn: document.getElementById("sendCodeBtn"),
+  verifyCodeBtn: document.getElementById("verifyCodeBtn"),
   statusText: document.getElementById("statusText"),
   logList: document.getElementById("logList"),
   serviceUrlWrap: document.getElementById("serviceUrlWrap"),
   profileBadge: document.getElementById("profileBadge"),
   serviceName: document.getElementById("serviceName"),
+  phoneNumber: document.getElementById("phoneNumber"),
+  phoneCode: document.getElementById("phoneCode"),
+  passwordWrap: document.getElementById("passwordWrap"),
+  twoFactorPassword: document.getElementById("twoFactorPassword"),
+  sessionString: document.getElementById("sessionString"),
+  sessionStatus: document.getElementById("sessionStatus"),
 };
 
 function notify(message, isError = false) {
@@ -36,7 +44,10 @@ async function api(path, body) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.detail || data.message || "Server xətası");
+    const error = new Error(data.detail || data.message || "Server xətası");
+    error.status = res.status;
+    error.data = data;
+    throw error;
   }
   return data;
 }
@@ -64,6 +75,19 @@ function renderStatus(data) {
   renderLogs(data.logs || []);
 }
 
+function updateSessionStatus(message, ready = false) {
+  els.sessionStatus.textContent = message;
+  els.sessionStatus.style.color = ready ? "#22c55e" : "";
+}
+
+function currentApiCredentials() {
+  const form = new FormData(els.form);
+  return {
+    api_id: Number(form.get("api_id")),
+    api_hash: form.get("api_hash")?.toString().trim(),
+  };
+}
+
 async function loadProfile() {
   if (!state.initData) {
     els.profileBadge.textContent = "Telegram içindən aç";
@@ -83,10 +107,58 @@ async function refreshStatus() {
   renderStatus(data);
 }
 
+els.sendCodeBtn.addEventListener("click", async () => {
+  try {
+    const creds = currentApiCredentials();
+    if (!creds.api_id || !creds.api_hash) {
+      throw new Error("Əvvəlcə API ID və API Hash doldur");
+    }
+    await api("/api/telegram/send-code", {
+      init_data: state.initData,
+      api_id: creds.api_id,
+      api_hash: creds.api_hash,
+      phone_number: els.phoneNumber.value,
+    });
+    els.passwordWrap.style.display = "none";
+    els.twoFactorPassword.value = "";
+    updateSessionStatus("Kod göndərildi. İndi Telegram kodunu daxil et.");
+    notify("Telegram kodu göndərildi");
+  } catch (error) {
+    notify(error.message, true);
+  }
+});
+
+els.verifyCodeBtn.addEventListener("click", async () => {
+  try {
+    if (!els.phoneCode.value.trim()) {
+      throw new Error("Telegram kodunu daxil et");
+    }
+    const data = await api("/api/telegram/verify-code", {
+      init_data: state.initData,
+      code: els.phoneCode.value.trim(),
+      password: els.twoFactorPassword.value.trim() || null,
+    });
+    els.sessionString.value = data.session_string || "";
+    els.passwordWrap.style.display = "none";
+    els.twoFactorPassword.value = "";
+    updateSessionStatus(`Hazırdır: ${data.account?.phone || "StringSession yaradıldı"}`, true);
+    notify("StringSession uğurla yaradıldı");
+  } catch (error) {
+    if (error.data?.password_required) {
+      els.passwordWrap.style.display = "block";
+      updateSessionStatus("2FA aktivdir. Telegram Cloud Password daxil et.");
+    }
+    notify(error.message, true);
+  }
+});
+
 els.form.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
     const form = new FormData(els.form);
+    if (!els.sessionString.value.trim()) {
+      throw new Error("Əvvəlcə telefon kodunu təsdiqləyib StringSession yarat");
+    }
     await api("/api/save-credentials", {
       init_data: state.initData,
       render_api_key: form.get("render_api_key"),
