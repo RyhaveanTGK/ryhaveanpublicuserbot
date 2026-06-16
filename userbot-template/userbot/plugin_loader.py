@@ -185,7 +185,7 @@ async def sync_plugins(client, *, force_remote: bool = False) -> SyncSummary:
                 failed_names.append(name)
                 log.error("Plugin yüklənmədi %s (db): %s", name, exc)
 
-        return SyncSummary(source="mongodb", loaded_names=sorted(loaded_names), failed_names=sorted(failed_names))
+        return SyncSummary(source=db.plugin_store_label(), loaded_names=sorted(loaded_names), failed_names=sorted(failed_names))
 
 
 async def load_all(client):
