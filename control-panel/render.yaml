@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: ryhavean-control-panel
+    runtime: docker
+    rootDir: control-panel
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: APP_BASE_URL
+        sync: false
+      - key: WEBAPP_URL
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_USERNAME
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB
+        value: ryhavean_control_panel
+      - key: MASTER_KEY
+        sync: false
+      - key: RENDER_TEMPLATE_REPO
+        sync: false
+      - key: RENDER_TEMPLATE_BRANCH
+        value: main
+      - key: RENDER_TEMPLATE_ROOT_DIR
+        value: userbot-template/userbot
