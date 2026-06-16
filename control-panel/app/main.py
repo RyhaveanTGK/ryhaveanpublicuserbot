@@ -97,9 +97,9 @@ def _normalize_phone_number(phone_number: str) -> str:
 
 
 
-def _build_auth_client(api_id: int, api_hash: str) -> TelegramClient:
+def _build_auth_client(api_id: int, api_hash: str, session_string: str = "") -> TelegramClient:
     return TelegramClient(
-        StringSession(),
+        StringSession(session_string),
         api_id,
         api_hash,
         device_model="Ryhavean Panel Auth",
@@ -149,6 +149,7 @@ async def api_send_telegram_code(payload: TelegramCodeRequest):
             api_hash=payload.api_hash,
             phone_number=phone_number,
             phone_code_hash=sent.phone_code_hash,
+            auth_session=client.session.save(),
         )
         return {"ok": True, "message": "Telegram kodu göndərildi"}
     except Exception as exc:
@@ -167,7 +168,7 @@ async def api_verify_telegram_code(payload: TelegramVerifyCodeRequest):
     if not auth_state:
         raise HTTPException(status_code=400, detail="Əvvəlcə kod göndərilməlidir")
 
-    client = _build_auth_client(auth_state["api_id"], auth_state["api_hash"])
+    client = _build_auth_client(auth_state["api_id"], auth_state["api_hash"], auth_state.get("auth_session", ""))
     try:
         await client.connect()
         try:
