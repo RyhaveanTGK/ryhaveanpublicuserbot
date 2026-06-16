@@ -62,16 +62,7 @@ def _default_local_plugin_dir() -> str:
     explicit = os.getenv("LOCAL_PLUGIN_DIR", "").strip()
     if explicit:
         return str(Path(explicit).expanduser())
-
-    candidates = [
-        REPO_DIR / "github_plugins",
-        BASE_DIR / "plugins",
-    ]
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_dir():
-            return str(candidate.resolve())
-
-    return str((REPO_DIR / "github_plugins").resolve())
+    return str((BASE_DIR / "plugins").resolve())
 
 
 def _detect_public_base_url() -> str:
@@ -97,7 +88,7 @@ class Config:
 
     PLUGIN_SOURCE_REPO = _detect_repo_from_git()
     PLUGIN_SOURCE_BRANCH = os.getenv("PLUGIN_SOURCE_BRANCH", "main")
-    PLUGIN_SOURCE_PATH = os.getenv("PLUGIN_SOURCE_PATH", "github_plugins").strip("/")
+    PLUGIN_SOURCE_PATH = os.getenv("PLUGIN_SOURCE_PATH", "plugins").strip("/")
     PLUGIN_SYNC_INTERVAL = max(60, int(os.getenv("PLUGIN_SYNC_INTERVAL", "300")))
     GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
     PLUGIN_CACHE_DIR = _default_plugin_cache_dir()
