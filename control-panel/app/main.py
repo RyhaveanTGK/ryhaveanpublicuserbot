@@ -108,6 +108,13 @@ def _build_auth_client(api_id: int, api_hash: str) -> TelegramClient:
     )
 
 
+def _normalize_telegram_code(code: str) -> str:
+    normalized = "".join(ch for ch in (code or "") if ch.isdigit())
+    if len(normalized) < 3:
+        raise HTTPException(status_code=400, detail="Telegram kodunu düzgün daxil et")
+    return normalized
+
+
 @app.post("/api/profile", response_model=ProfileResponse)
 async def api_profile(payload: InitDataRequest):
     user = _extract_user(payload.init_data)
@@ -166,7 +173,7 @@ async def api_verify_telegram_code(payload: TelegramVerifyCodeRequest):
         try:
             await client.sign_in(
                 phone=auth_state["phone_number"],
-                code=payload.code.strip(),
+                code=_normalize_telegram_code(payload.code),
                 phone_code_hash=auth_state["phone_code_hash"],
             )
         except SessionPasswordNeededError:
