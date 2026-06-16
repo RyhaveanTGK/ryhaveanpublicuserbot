@@ -80,6 +80,52 @@ function updateSessionStatus(message, ready = false) {
   els.sessionStatus.style.color = ready ? "#22c55e" : "";
 }
 
+function normalizePhoneCode(value = "") {
+  return value.replace(/\D/g, "").slice(0, 6);
+}
+
+function formatPhoneCode(value = "") {
+  return normalizePhoneCode(value).split("").join(" ");
+}
+
+function bindPhoneCodeFormatter() {
+  const input = els.phoneCode;
+  if (!input) return;
+
+  input.addEventListener("beforeinput", (event) => {
+    const raw = input.value;
+    const normalized = normalizePhoneCode(raw);
+    const hasSelection = input.selectionStart !== input.selectionEnd;
+
+    if (event.inputType === "deleteContentBackward" && !hasSelection) {
+      const cursor = input.selectionStart ?? raw.length;
+      if (cursor > 0 && raw[cursor - 1] === " ") {
+        const newDigits = normalized.slice(0, -1);
+        input.value = formatPhoneCode(newDigits);
+        const pos = input.value.length;
+        input.setSelectionRange(pos, pos);
+        event.preventDefault();
+      }
+    }
+  });
+
+  input.addEventListener("input", () => {
+    const formatted = formatPhoneCode(input.value);
+    input.value = formatted;
+    const pos = formatted.length;
+    input.setSelectionRange(pos, pos);
+  });
+
+  input.addEventListener("paste", (event) => {
+    event.preventDefault();
+    const pasted = event.clipboardData?.getData("text") || "";
+    const formatted = formatPhoneCode(pasted);
+    input.value = formatted;
+    const pos = formatted.length;
+    input.setSelectionRange(pos, pos);
+  });
+}
+
 function currentApiCredentials() {
   const form = new FormData(els.form);
   return {
@@ -133,9 +179,13 @@ els.verifyCodeBtn.addEventListener("click", async () => {
     if (!els.phoneCode.value.trim()) {
       throw new Error("Telegram kodunu daxil et");
     }
+    const normalizedCode = normalizePhoneCode(els.phoneCode.value);
+    if (!normalizedCode) {
+      throw new Error("Telegram kodunu daxil et");
+    }
     const data = await api("/api/telegram/verify-code", {
       init_data: state.initData,
-      code: els.phoneCode.value.trim(),
+      code: normalizedCode,
       password: els.twoFactorPassword.value.trim() || null,
     });
     els.sessionString.value = data.session_string || "";
@@ -198,6 +248,8 @@ els.refreshBtn.addEventListener("click", async () => {
     notify(error.message, true);
   }
 });
+
+bindPhoneCodeFormatter();
 
 loadProfile().catch((error) => {
   notify(error.message, true);
