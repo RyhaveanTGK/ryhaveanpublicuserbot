@@ -25,6 +25,8 @@ class CloneSnapshot:
 
 _client: AsyncIOMotorClient | None = None
 _database: AsyncIOMotorDatabase | None = None
+_plugin_client: AsyncIOMotorClient | None = None
+_plugin_database: AsyncIOMotorDatabase | None = None
 
 _settings: dict[str, str] = {}
 _welcomes: dict[tuple[int, int], str] = {}
@@ -39,6 +41,18 @@ def _owner_scope() -> int:
 
 def _mongo_enabled() -> bool:
     return _database is not None
+
+
+def _plugin_mongo_enabled() -> bool:
+    return _plugin_database is not None
+
+
+def _plugin_mongo_uri() -> str:
+    return (Config.PLUGIN_MONGODB_URI or Config.MONGODB_URI or "").strip()
+
+
+def _plugin_mongo_db_name() -> str:
+    return (Config.PLUGIN_MONGODB_DB or "ryhavean_shared_plugins").strip() or "ryhavean_shared_plugins"
 
 
 def _photo_to_text(photo: bytes) -> str:
@@ -90,16 +104,23 @@ async def _ensure_indexes() -> None:
         unique=True,
     )
 
-    await _database.plugins.create_index(
+
+async def _ensure_plugin_indexes() -> None:
+    if _plugin_database is None:
+        return
+
+    await _plugin_database.plugins.create_index(
         [("name", 1)],
         unique=True,
     )
 
 
 async def init_db():
-    global _client, _database
+    global _client, _database, _plugin_client, _plugin_database
 
-    if _database is not None:
+    main_ready = _database is not None
+    plugin_ready = _plugin_database is not None
+    if main_ready and plugin_ready:
         return True
 
     if not Config.MONGODB_URI:
@@ -107,41 +128,74 @@ async def init_db():
         return False
 
     try:
-        _client = AsyncIOMotorClient(
-            Config.MONGODB_URI,
-            serverSelectionTimeoutMS=10000,
-            connectTimeoutMS=10000,
-            socketTimeoutMS=10000,
-            retryWrites=True,
-        )
+        if _client is None:
+            _client = AsyncIOMotorClient(
+                Config.MONGODB_URI,
+                serverSelectionTimeoutMS=10000,
+                connectTimeoutMS=10000,
+                socketTimeoutMS=10000,
+                retryWrites=True,
+            )
+            await _client.admin.command("ping")
 
-        await _client.admin.command("ping")
+        if _database is None:
+            _database = _client[Config.MONGODB_DB]
+            await _ensure_indexes()
+            log.info("✅ MongoDB qoşuldu: db=%s", Config.MONGODB_DB)
 
-        _database = _client[Config.MONGODB_DB]
+        plugin_uri = _plugin_mongo_uri()
+        plugin_db_name = _plugin_mongo_db_name()
+        if plugin_uri:
+            same_plugin_store = (
+                plugin_uri == Config.MONGODB_URI
+                and plugin_db_name == Config.MONGODB_DB
+            )
+            if same_plugin_store:
+                _plugin_client = _client
+                _plugin_database = _database
+            elif _plugin_database is None:
+                if _plugin_client is None:
+                    _plugin_client = AsyncIOMotorClient(
+                        plugin_uri,
+                        serverSelectionTimeoutMS=10000,
+                        connectTimeoutMS=10000,
+                        socketTimeoutMS=10000,
+                        retryWrites=True,
+                    )
+                    await _plugin_client.admin.command("ping")
+                _plugin_database = _plugin_client[plugin_db_name]
+            await _ensure_plugin_indexes()
+            if _plugin_database is not None:
+                log.info("✅ Plugin store qoşuldu: db=%s", plugin_db_name)
 
-        await _ensure_indexes()
-
-        log.info("✅ MongoDB qoşuldu: db=%s", Config.MONGODB_DB)
-        return True
+        return _database is not None
 
     except Exception:
         log.exception("MongoDB bağlantı xətası")
 
         _database = None
+        _plugin_database = None
 
+        if _plugin_client is not None and _plugin_client is not _client:
+            _plugin_client.close()
         if _client is not None:
             _client.close()
 
+        _plugin_client = None
         _client = None
         return False
 
 
 async def close_db():
-    global _client, _database
+    global _client, _database, _plugin_client, _plugin_database
 
+    if _plugin_client is not None and _plugin_client is not _client:
+        _plugin_client.close()
     if _client is not None:
         _client.close()
 
+    _plugin_client = None
+    _plugin_database = None
     _client = None
     _database = None
 
@@ -150,6 +204,21 @@ def pool():
     if not _mongo_enabled():
         raise RuntimeError("MongoDB aktiv deyil")
     return _database
+
+
+def plugin_pool():
+    if not _plugin_mongo_enabled():
+        raise RuntimeError("Plugin store aktiv deyil")
+    return _plugin_database
+
+
+def plugin_store_label() -> str:
+    if not _plugin_mongo_enabled():
+        return "local"
+    plugin_db_name = _plugin_mongo_db_name()
+    if _database is not None and _plugin_database is _database:
+        return f"mongodb:{plugin_db_name}"
+    return f"shared-mongodb:{plugin_db_name}"
 
 
 async def set_setting(key: str, value: str):
@@ -353,8 +422,8 @@ async def upsert_plugin(name: str, code: str, *, source_name: str = "", installe
         "code_hash": hashlib.sha1(code.encode("utf-8")).hexdigest(),
     }
 
-    if _mongo_enabled():
-        await _database.plugins.update_one(
+    if _plugin_mongo_enabled():
+        await _plugin_database.plugins.update_one(
             {"name": name},
             {
                 "$set": {
@@ -373,8 +442,8 @@ async def upsert_plugin(name: str, code: str, *, source_name: str = "", installe
 
 
 async def get_plugin(name: str):
-    if _mongo_enabled():
-        row = await _database.plugins.find_one({"name": name})
+    if _plugin_mongo_enabled():
+        row = await _plugin_database.plugins.find_one({"name": name})
         if row is None:
             return None
         return {
@@ -398,8 +467,8 @@ async def get_plugin(name: str):
 
 
 async def list_plugins():
-    if _mongo_enabled():
-        rows = await _database.plugins.find({}).sort("name", 1).to_list(length=None)
+    if _plugin_mongo_enabled():
+        rows = await _plugin_database.plugins.find({}).sort("name", 1).to_list(length=None)
         return [
             {
                 "name": str(row.get("name", "")).strip(),
@@ -428,8 +497,8 @@ async def list_plugins():
 
 
 async def remove_plugin(name: str) -> bool:
-    if _mongo_enabled():
-        result = await _database.plugins.delete_one({"name": name})
+    if _plugin_mongo_enabled():
+        result = await _plugin_database.plugins.delete_one({"name": name})
         return result.deleted_count > 0
 
     existed = f"plugin:{name}" in _settings
