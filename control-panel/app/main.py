@@ -2,18 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+from telethon import TelegramClient
+from telethon.errors import PhoneCodeExpiredError, PhoneCodeInvalidError, SessionPasswordNeededError
+from telethon.sessions import StringSession
 
 import db
 from bot import start_bot_polling, stop_bot_polling
 from deployment import DEPLOYMENTS, ensure_service, get_state
-from schemas import CredentialPayload, DeployRequest, InitDataRequest, ProfileResponse
+from schemas import (
+    CredentialPayload,
+    DeployRequest,
+    InitDataRequest,
+    ProfileResponse,
+    TelegramCodeRequest,
+    TelegramVerifyCodeRequest,
+)
 from telegram_auth import TelegramAuthError, validate_init_data
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -21,6 +32,7 @@ log = logging.getLogger("ryhavean.panel")
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+PHONE_RE = re.compile(r"^\+[1-9]\d{6,14}$")
 
 
 @asynccontextmanager
@@ -44,7 +56,7 @@ async def lifespan(app: FastAPI):
         pass
 
 
-app = FastAPI(title="Ryhavean Control Panel", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Ryhavean Control Panel", version="2.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -60,9 +72,10 @@ async def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"], response_class=PlainTextResponse)
 def health():
-    return "ok"
+    return PlainTextResponse("ok", headers={"Cache-Control": "no-store"})
+
 
 
 def _extract_user(init_data: str) -> dict:
@@ -71,6 +84,28 @@ def _extract_user(init_data: str) -> dict:
     except TelegramAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     return auth["user"]
+
+
+
+def _normalize_phone_number(phone_number: str) -> str:
+    phone = re.sub(r"[^\d+]", "", (phone_number or "").strip())
+    if phone.startswith("00"):
+        phone = f"+{phone[2:]}"
+    if not PHONE_RE.fullmatch(phone):
+        raise HTTPException(status_code=400, detail="Telefon nömrəsini ölkə kodu ilə daxil et. Nümunə: +994501234567")
+    return phone
+
+
+
+def _build_auth_client(api_id: int, api_hash: str) -> TelegramClient:
+    return TelegramClient(
+        StringSession(),
+        api_id,
+        api_hash,
+        device_model="Ryhavean Panel Auth",
+        system_version="webapp",
+        app_version="2.0.0",
+    )
 
 
 @app.post("/api/profile", response_model=ProfileResponse)
@@ -88,6 +123,88 @@ async def api_profile(payload: InitDataRequest):
         service_url=doc.get("service_url", ""),
         deploy_status=doc.get("deploy_status", "idle"),
     )
+
+
+@app.post("/api/telegram/send-code")
+async def api_send_telegram_code(payload: TelegramCodeRequest):
+    user = _extract_user(payload.init_data)
+    telegram_id = int(user["id"])
+    await db.upsert_user_identity(user)
+
+    phone_number = _normalize_phone_number(payload.phone_number)
+    client = _build_auth_client(payload.api_id, payload.api_hash)
+    try:
+        await client.connect()
+        sent = await client.send_code_request(phone_number)
+        await db.save_phone_login_session(
+            telegram_id,
+            api_id=payload.api_id,
+            api_hash=payload.api_hash,
+            phone_number=phone_number,
+            phone_code_hash=sent.phone_code_hash,
+        )
+        return {"ok": True, "message": "Telegram kodu göndərildi"}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Kod göndərilmədi: {exc}") from exc
+    finally:
+        await client.disconnect()
+
+
+@app.post("/api/telegram/verify-code")
+async def api_verify_telegram_code(payload: TelegramVerifyCodeRequest):
+    user = _extract_user(payload.init_data)
+    telegram_id = int(user["id"])
+    await db.upsert_user_identity(user)
+
+    auth_state = await db.get_phone_login_session(telegram_id)
+    if not auth_state:
+        raise HTTPException(status_code=400, detail="Əvvəlcə kod göndərilməlidir")
+
+    client = _build_auth_client(auth_state["api_id"], auth_state["api_hash"])
+    try:
+        await client.connect()
+        try:
+            await client.sign_in(
+                phone=auth_state["phone_number"],
+                code=payload.code.strip(),
+                phone_code_hash=auth_state["phone_code_hash"],
+            )
+        except SessionPasswordNeededError:
+            if not payload.password:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "ok": False,
+                        "password_required": True,
+                        "message": "Bu hesab üçün 2 mərhələli şifrə tələb olunur",
+                    },
+                )
+            await client.sign_in(password=payload.password)
+        except PhoneCodeInvalidError as exc:
+            raise HTTPException(status_code=400, detail="Daxil edilən kod yanlışdır") from exc
+        except PhoneCodeExpiredError as exc:
+            raise HTTPException(status_code=400, detail="Kodun vaxtı bitib, yenidən kod göndər") from exc
+
+        me = await client.get_me()
+        session_string = client.session.save()
+        await db.clear_phone_login_session(telegram_id)
+        return {
+            "ok": True,
+            "message": "StringSession uğurla yaradıldı",
+            "session_string": session_string,
+            "account": {
+                "id": me.id,
+                "first_name": me.first_name or "",
+                "username": me.username or "",
+                "phone": auth_state["phone_number"],
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"StringSession yaradılmadı: {exc}") from exc
+    finally:
+        await client.disconnect()
 
 
 @app.post("/api/save-credentials")
