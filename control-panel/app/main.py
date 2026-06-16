@@ -61,8 +61,8 @@ async def index():
 
 
 @app.get("/health")
-async def health():
-    return {"status": "ok"}
+def health():
+    return "ok"
 
 
 def _extract_user(init_data: str) -> dict:
