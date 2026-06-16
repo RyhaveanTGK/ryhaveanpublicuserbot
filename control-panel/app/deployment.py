@@ -120,6 +120,8 @@ def build_env_vars(telegram_id: int, credentials: dict[str, Any], service_url: s
         "SESSION_STRING": credentials.get("session_string"),
         "MONGODB_URI": credentials.get("mongodb_uri") or settings.mongodb_uri,
         "MONGODB_DB": f"ryhavean_userbot_{telegram_id}",
+        "PLUGIN_MONGODB_URI": settings.shared_plugin_mongodb_uri or credentials.get("mongodb_uri") or settings.mongodb_uri,
+        "PLUGIN_MONGODB_DB": settings.shared_plugin_mongodb_db,
         "OWNER_ID": telegram_id,
         "CMD_PREFIX": credentials.get("cmd_prefix", "."),
         "UPTIME_ENABLED": "1",
@@ -336,7 +338,7 @@ async def watch_service(telegram_id: int, client: RenderClient, service_id: str 
     )
 
     state.status = "pending"
-    state.summary = "Render build hÉ™lÉ™ davam edir, sonra statusu yenilÉ™"
+    state.summary = "Render build hələ davam edir, sonra statusu yenilə"
 
     await db.save_deploy_state(telegram_id, "pending", state.summary)
     await _log(telegram_id, "warning", state.summary)
