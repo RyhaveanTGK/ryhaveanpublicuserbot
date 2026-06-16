@@ -23,7 +23,6 @@ class Settings:
     render_template_repo: str = os.getenv("RENDER_TEMPLATE_REPO", "https://github.com/yourname/Ryhavean.git")
     render_template_branch: str = os.getenv("RENDER_TEMPLATE_BRANCH", "main")
     render_template_root_dir: str = os.getenv("RENDER_TEMPLATE_ROOT_DIR", "userbot-template/userbot")
-    render_workspace_hint: str = os.getenv("RENDER_WORKSPACE_HINT", "")
 
     userbot_env_prefix: str = os.getenv("USERBOT_ENV_PREFIX", "ryhavean")
     service_name_prefix: str = os.getenv("SERVICE_NAME_PREFIX", "ryhavean-userbot")
@@ -31,7 +30,7 @@ class Settings:
 
     start_message: str = os.getenv(
         "START_MESSAGE",
-        "Salam, Ryhavean panelinə xoş gəldin. Aşağıdakı düymə ilə mini web app-i açıb öz hazır String Session məlumatlarınla deploy edə bilərsən.",
+        "Salam, Ryhavean İnstaller'ə xoş gəldin. Aşağıdakı düymə ilə mini web app-i açıb telefon nömrəsi, login kodu və Render API açarı ilə deploy edə bilərsən.",
     )
 
 
