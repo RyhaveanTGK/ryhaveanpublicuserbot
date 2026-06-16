@@ -17,6 +17,17 @@ class CredentialPayload(InitDataRequest):
     app_base_url: str | None = None
 
 
+class TelegramCodeRequest(InitDataRequest):
+    api_id: int = Field(..., gt=0)
+    api_hash: str = Field(..., min_length=10)
+    phone_number: str = Field(..., min_length=7, max_length=20)
+
+
+class TelegramVerifyCodeRequest(InitDataRequest):
+    code: str = Field(..., min_length=3, max_length=10)
+    password: str | None = None
+
+
 class DeployRequest(InitDataRequest):
     service_name: str | None = None
 
