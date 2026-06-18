@@ -406,19 +406,30 @@ def register(client):
     async def help_cmd(event):
         plugins = list(plugin_loader.loaded.keys())
         current_delay = await _get_tag_delay()
+        plugin_text = ", ".join(f"<code>{name}</code>" for name in plugins) if plugins else "Yoxdur"
         text = (
-            "Raven Userbot\n"
-            "━━━━━━━━━━━━━━━\n"
-            "🛡 İdarəetmə:\n"
-            "<code>.alive</code> | <code>.dlive</code> | <code>.restart</code> | <code>.pluginsync</code> | <code>.pinstall</code> | <code>.unpinstall</code>\n\n"
-            "🔨 Moderasiya:\n"
-            "<code>.ban</code> | <code>.unban</code> | <code>.mute</code> | <code>.block</code> | <code>.unblock</code>\n\n"
-            "👤 İstifadəçi & Qrup:\n"
-            f"<code>.info</code> | <code>.tag [mod] [1-10]</code> | <code>.tagsebeb səbəb | mod 1-10</code> | <code>.stop</code> | <code>.tagtime {current_delay}</code> | <code>.setwelcome</code> | <code>.filter</code> | <code>.filtersil</code>\n\n"
-            "🧬 Profil:\n"
-            "<code>.klon</code> | <code>.unklon</code>\n\n"
-            f"🔌 Aktiv Pluginlər ({len(plugins)}):\n"
-            f"{', '.join(plugins) if plugins else 'Yoxdur'}"
+            "<b>🦅 Ryhavean Userbot — Kömək Menyusu</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "<b>🛡 İdarəetmə</b>\n"
+            "• <code>.alive</code> — bot statusu\n"
+            "• <code>.dlive [mətn]</code> — alive mesajını dəyiş\n"
+            "• <code>.restart</code> — userbotu yenidən başlat\n"
+            "• <code>.pluginsync</code> — pluginləri yenilə\n"
+            "<b>🔨 Moderasiya</b>\n"
+            "• <code>.ban</code> / <code>.unban</code>\n"
+            "• <code>.mute</code>\n"
+            "• <code>.block</code> / <code>.unblock</code>\n\n"
+            "<b>👥 İstifadəçi & Qrup</b>\n"
+            "• <code>.info</code> — istifadəçi məlumatı\n"
+            "• <code>.tag [mod] [1-10]</code> — tag menyusu / sürətli tag\n"
+            "• <code>.setwelcome [mətn]</code> — xoşgəldin mesajı yaz\n"
+            "• <code>.filter [söz] [cavab]</code> — filter əlavə et\n"
+            "• <code>.filtersil [söz]</code> — filter sil\n\n"
+            "<b>🧬 Profil</b>\n"
+            "• <code>.klon</code> — yalnız real istifadəçini klonla\n"
+            "• <code>.unklon</code> — orijinal profilə qayıt\n\n"
+            f"<b>🔌 Aktiv Pluginlər ({len(plugins)})</b>\n"
+            f"{plugin_text}"
         )
         await edit_safe(event, text)
 
@@ -777,6 +788,12 @@ def register(client):
         _, ent = await get_target_user(event)
         if not ent:
             return await edit_safe(event, f"ℹ️ İstifadə: <code>{P}klon</code> (reply və ya id)")
+        if getattr(ent, "bot", False):
+            return await edit_safe(event, "⛔ Bot hesabları klonlana bilməz. Yalnız real istifadəçiləri klonlaya bilərsən.")
+        if getattr(ent, "deleted", False):
+            return await edit_safe(event, "⛔ Silinmiş hesab klonlana bilməz. Yalnız real istifadəçiləri klonlaya bilərsən.")
+        if not any(hasattr(ent, field) for field in ("first_name", "last_name", "username")):
+            return await edit_safe(event, "⛔ Bu obyekt real istifadəçi deyil. Yalnız real istifadəçiləri klonlaya bilərsən.")
         await edit_safe(event, "🧬 Klonlanır...")
         me = await event.client.get_me()
         existing_snapshot = await db.get_clone(me.id)
@@ -810,7 +827,7 @@ def register(client):
             target_photo = await _download_profile_photo_bytes(event.client, ent)
             await _replace_profile_photo(event.client, target_photo, file_name="klon.jpg")
 
-            await edit_safe(event, f"✅ Klonlama tamamlandı: {target_name}")
+            await edit_safe(event, f"Səni Klonladım ⚡️: {target_name}")
         except FloodWaitError as exc:
             await edit_safe(event, f"⏳ FloodWait: {exc.seconds} saniyə gözləyin")
         except Exception as exc:
@@ -832,7 +849,7 @@ def register(client):
             )
             await _replace_profile_photo(event.client, row.original_photo, file_name="orig.jpg")
             await db.delete_clone(me.id)
-            await edit_safe(event, "✅ Original profil geri qaytarıldı.")
+            await edit_safe(event, "⚡️ Original profil geri qaytarıldı.")
         except FloodWaitError as exc:
             await edit_safe(event, f"⏳ FloodWait: {exc.seconds} saniyə gözləyin")
         except Exception as exc:
