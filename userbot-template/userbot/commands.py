@@ -405,30 +405,28 @@ def register(client):
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("help")))
     async def help_cmd(event):
         plugins = list(plugin_loader.loaded.keys())
-        current_delay = await _get_tag_delay()
         plugin_text = ", ".join(f"<code>{name}</code>" for name in plugins) if plugins else "Yoxdur"
         text = (
-            "<b>🦅 Ryhavean Userbot — Kömək Menyusu</b>\n"
+            "🦅 Ryhavean Userbot\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "<b>🛡 İdarəetmə</b>\n"
+            "🛡 İdarəetmə\n"
             "• <code>.alive</code> — bot statusu\n"
             "• <code>.dlive [mətn]</code> — alive mesajını dəyiş\n"
             "• <code>.restart</code> — userbotu yenidən başlat\n"
-            "• <code>.pluginsync</code> — pluginləri yenilə\n"
-            "<b>🔨 Moderasiya</b>\n"
+            "• <code>.pluginsync</code> — pluginləri yenilə\n\n"
+            "🔨 Moderasiya\n"
             "• <code>.ban</code> / <code>.unban</code>\n"
             "• <code>.mute</code>\n"
             "• <code>.block</code> / <code>.unblock</code>\n\n"
-            "<b>👥 İstifadəçi & Qrup</b>\n"
+            "👥 İstifadəçi & Qrup\n"
             "• <code>.info</code> — istifadəçi məlumatı\n"
-            "• <code>.tag [mod] [1-10]</code> — tag menyusu / sürətli tag\n"
             "• <code>.setwelcome [mətn]</code> — xoşgəldin mesajı yaz\n"
             "• <code>.filter [söz] [cavab]</code> — filter əlavə et\n"
             "• <code>.filtersil [söz]</code> — filter sil\n\n"
-            "<b>🧬 Profil</b>\n"
+            "🧬 Profil\n"
             "• <code>.klon</code> — yalnız real istifadəçini klonla\n"
             "• <code>.unklon</code> — orijinal profilə qayıt\n\n"
-            f"<b>🔌 Aktiv Pluginlər ({len(plugins)})</b>\n"
+            f"🔌 Aktiv Pluginlər ({len(plugins)})\n"
             f"{plugin_text}"
         )
         await edit_safe(event, text)
@@ -608,108 +606,6 @@ def register(client):
         )
         await edit_safe(event, text)
 
-    @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("hskakakaksjxjdh")))
-    async def tagtime(event):
-        raw = event.pattern_match.group(1).strip()
-        if not raw or not raw.isdigit():
-            current_delay = await _get_tag_delay()
-            return await edit_safe(
-                event,
-                (
-                    f"ℹ️ İstifadə: <code>{P}tagtime 1-10</code>\n"
-                    f"Hazırkı interval: <code>{current_delay}</code> saniyə"
-                ),
-            )
-        delay = int(raw)
-        if delay < MIN_TAG_DELAY or delay > MAX_TAG_DELAY:
-            return await edit_safe(event, "⚠️ Tag intervalı 1-10 saniyə aralığında olmalıdır.")
-        saved_delay = await _set_tag_delay(delay)
-        await edit_safe(event, f"✅ Tag intervalı <code>{saved_delay}</code> saniyə olaraq yadda saxlanıldı.")
-    @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("jsoakakakak")))
-    async def stop_tag(event):
-        if not event.is_group:
-            return await edit_safe(event, "⚠️ Yalnız qruplarda işləyir.")
-        if _request_tag_stop(event.chat_id):
-            await edit_safe(event, "🛑 Aktiv tag prosesi dayandırılacaq.")
-        else:
-            await edit_safe(event, "ℹ️ Aktiv tag prosesi yoxdur.")
-
-    @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("hkakakakakaakakak")))
-    async def tag_reason(event):
-        if not event.is_group:
-            return await edit_safe(event, "⚠️ Yalnız qruplarda işləyir.")
-        if _get_tag_run(event.chat_id):
-            return await edit_safe(event, "⚠️ Hazırda aktiv tag prosesi var. Dayandırmaq üçün <code>.stop</code> yazın.")
-        if not await tag_rl_check(event.sender_id):
-            return await edit_safe(event, "⏳ .tagsebeb üçün 2 saniyə gözləyin.")
-
-        raw = event.pattern_match.group(1).strip()
-        if not raw:
-            return await edit_safe(
-                event,
-                (
-                    f"ℹ️ İstifadə: <code>{P}tagsebeb səbəb mətni</code>\n"
-                    f"Opsional: <code>{P}tagsebeb səbəb mətni | trio 3</code>"
-                ),
-            )
-
-        reason_text = raw
-        mode_key = "hajaja"
-        delay = await _get_tag_delay()
-        if "|" in raw:
-            reason_text, options = [part.strip() for part in raw.split("|", 1)]
-            mode_key, delay = _parse_tag_args(options.lower(), delay)
-        if not reason_text:
-            return await edit_safe(event, "⚠️ Səbəb mətni boş ola bilməz.")
-        if mode_key not in TAG_MODES:
-            return await edit_safe(event, "⚠️ Mövcud modlar: solo, trio, five, wave, random")
-        if delay < MIN_TAG_DELAY or delay > MAX_TAG_DELAY:
-            return await edit_safe(event, "⚠️ Tag intervalı 1-10 saniyə aralığında olmalıdır.")
-        await _run_tag_mode(event, mode_key, delay, reason_text=reason_text)
-
-    @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("kakakakakakakakakakak")))
-    async def tag(event):
-        if not event.is_group:
-            return await edit_safe(event, "⚠️ Yalnız qruplarda işləyir.")
-        if _get_tag_run(event.chat_id):
-            return await edit_safe(event, "⚠️ Hazırda aktiv tag prosesi var. Dayandırmaq üçün <code>.stop</code> yazın.")
-        if not await tag_rl_check(event.sender_id):
-            return await edit_safe(event, "⏳ .tag üçün 2 saniyə gözləyin.")
-
-        default_delay = await _get_tag_delay()
-        raw = event.pattern_match.group(1).strip().lower()
-        if not raw:
-            menu = (
-                "🏷 <b>Tag menu</b>\n"
-                "━━━━━━━━━━━━━━━\n"
-                "1. Solo — hamını tək-tək mention edir\n"
-                "2. Trio — 3 nəfərlik qruplarla mention edir\n"
-                "3. Five — 5 nəfərlik qruplarla mention edir\n"
-                "4. Wave — dalğa formasında bütün üzvləri mention edir\n"
-                "5. Random — üzvləri qarışıq sıra ilə mention edir\n\n"
-                f"Cari interval: <code>{default_delay}</code> saniyə\n"
-                f"İstifadə: <code>{P}tag solo 3</code>, <code>{P}tag 5</code>, <code>{P}tagsebeb iclas var | trio 3</code>, <code>{P}stop</code>, <code>{P}tagtime 4</code>"
-            )
-            return await edit_safe(event, menu, buttons=_tag_buttons())
-
-        mode_key, delay = _parse_tag_args(raw, default_delay)
-        if mode_key not in TAG_MODES:
-            return await edit_safe(event, "⚠️ Mövcud modlar: solo, trio, five, wave, random")
-        if delay < MIN_TAG_DELAY or delay > MAX_TAG_DELAY:
-            return await edit_safe(event, "⚠️ Tag intervalı 1-10 saniyə aralığında olmalıdır.")
-        await _run_tag_mode(event, mode_key, delay)
-
-    @client.on(events.CallbackQuery(pattern=rb"^tag:(solo|trio|five|wave|random)$"))
-    async def tag_callback(event):
-        if _get_tag_run(event.chat_id):
-            return await event.answer("Aktiv tag prosesi var. Dayandırmaq üçün .stop istifadə edin", alert=True)
-        if not await tag_rl_check(event.sender_id):
-            return await event.answer("2 saniyə gözləyin", alert=True)
-        delay = await _get_tag_delay()
-        mode_key = event.data.decode().split(":", 1)[1]
-        await event.answer(f"{TAG_MODES[mode_key].title} başladı • {delay}s")
-        await _run_tag_mode(event, mode_key, delay)
-
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("filter")))
     async def add_filter(event):
         if not event.is_group:
@@ -849,7 +745,7 @@ def register(client):
             )
             await _replace_profile_photo(event.client, row.original_photo, file_name="orig.jpg")
             await db.delete_clone(me.id)
-            await edit_safe(event, "⚡️ Original profil geri qaytarıldı.")
+            await edit_safe(event, "Original profil geri qaytarıldı ⚡️")
         except FloodWaitError as exc:
             await edit_safe(event, f"⏳ FloodWait: {exc.seconds} saniyə gözləyin")
         except Exception as exc:
