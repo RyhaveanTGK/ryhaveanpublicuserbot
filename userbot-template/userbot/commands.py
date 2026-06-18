@@ -408,7 +408,7 @@ def register(client):
         plugin_text = ", ".join(f"<code>{name}</code>" for name in plugins) if plugins else "Yoxdur"
         text = (
             "🦅 Ryhavean Userbot\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "━━━━━━━━━━━━━━━\n\n"
             "🛡 İdarəetmə\n"
             "• <code>.alive</code> — bot statusu\n"
             "• <code>.dlive [mətn]</code> — alive mesajını dəyiş\n"
