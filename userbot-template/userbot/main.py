@@ -12,7 +12,9 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from telethon import TelegramClient
+from telethon.tl.custom import Message
 from telethon.sessions import StringSession
+from telethon.tl.types import MessageEntityBold, MessageEntityCode, MessageEntityPre
 
 from config import Config
 import commands
@@ -57,49 +59,112 @@ async def _set_runtime_state(status: str, summary: str) -> None:
         log.debug("Runtime status yaddaşa yazılmadı: %s", exc)
 
 
-def _install_extra_emoji_patches():
-    if getattr(TelegramClient, "_raven_extra_emoji_patch", False):
+def _utf16_len(value: str) -> int:
+    return len((value or "").encode("utf-16-le")) // 2
+
+
+def _merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    if not ranges:
+        return []
+    ranges = sorted(ranges)
+    merged = [list(ranges[0])]
+    for start, end in ranges[1:]:
+        last = merged[-1]
+        if start <= last[1]:
+            last[1] = max(last[1], end)
+        else:
+            merged.append([start, end])
+    return [(start, end) for start, end in merged]
+
+
+def _build_auto_bold_entities(text: str, entities: list) -> list[MessageEntityBold]:
+    total_length = _utf16_len(text)
+    if total_length <= 0:
+        return []
+
+    excluded = []
+    for entity in entities:
+        if isinstance(entity, (MessageEntityCode, MessageEntityPre)):
+            start = max(0, int(entity.offset))
+            end = min(total_length, start + max(0, int(entity.length)))
+            if end > start:
+                excluded.append((start, end))
+
+    excluded = _merge_ranges(excluded)
+    bold_entities: list[MessageEntityBold] = []
+    cursor = 0
+    for start, end in excluded:
+        if start > cursor:
+            bold_entities.append(MessageEntityBold(offset=cursor, length=start - cursor))
+        cursor = max(cursor, end)
+    if cursor < total_length:
+        bold_entities.append(MessageEntityBold(offset=cursor, length=total_length - cursor))
+    return [entity for entity in bold_entities if entity.length > 0]
+
+
+def _prepare_styled_payload(raw_text: str | None, kwargs: dict):
+    if not isinstance(raw_text, str):
+        return raw_text, kwargs
+
+    parse_mode = kwargs.pop("parse_mode", None)
+    base_entities = kwargs.pop("formatting_entities", None) or kwargs.pop("entities", None)
+    parsed_text, combined_entities = emoji_utils.apply_premium_emojis(raw_text, base_entities, parse_mode)
+    combined_entities = list(combined_entities or [])
+    combined_entities.extend(_build_auto_bold_entities(parsed_text or "", combined_entities))
+    kwargs["formatting_entities"] = combined_entities
+    return parsed_text, kwargs
+
+
+def _install_global_message_patches():
+    if getattr(TelegramClient, "_ryhavean_global_style_patch", False):
         return
 
-    injector = getattr(emoji_utils, "_inject_entities", None)
-    if injector is None:
-        return
-
-    base_send_message = getattr(emoji_utils, "_orig_send_message", TelegramClient.send_message)
+    base_send_message = TelegramClient.send_message
     base_send_file = TelegramClient.send_file
     base_edit_message = TelegramClient.edit_message
-
-    def _prepare_text_payload(raw_text: str | None, kwargs: dict):
-        if not isinstance(raw_text, str):
-            return raw_text, kwargs
-        parse_mode = kwargs.pop("parse_mode", None)
-        base_entities = kwargs.pop("formatting_entities", None) or kwargs.pop("entities", None)
-        text, entities = injector(raw_text, base_entities, parse_mode)
-        kwargs["formatting_entities"] = entities
-        return text, kwargs
+    base_message_edit = Message.edit
+    base_message_reply = Message.reply
+    base_message_respond = Message.respond
 
     async def _patched_send_message(self, entity, message="", *args, **kwargs):
-        message, kwargs = _prepare_text_payload(message, kwargs)
+        message, kwargs = _prepare_styled_payload(message, kwargs)
         return await base_send_message(self, entity, message, *args, **kwargs)
 
     async def _patched_send_file(self, entity, file, *args, **kwargs):
         caption = kwargs.get("caption")
-        caption, kwargs = _prepare_text_payload(caption, kwargs)
+        caption, kwargs = _prepare_styled_payload(caption, kwargs)
         kwargs["caption"] = caption
         return await base_send_file(self, entity, file, *args, **kwargs)
 
     async def _patched_edit_message(self, entity, message=None, text=None, *args, **kwargs):
         if isinstance(text, str):
-            text, kwargs = _prepare_text_payload(text, kwargs)
+            text, kwargs = _prepare_styled_payload(text, kwargs)
+        elif isinstance(message, str):
+            message, kwargs = _prepare_styled_payload(message, kwargs)
         return await base_edit_message(self, entity, message, text=text, *args, **kwargs)
+
+    async def _patched_message_edit(self, text=None, *args, **kwargs):
+        text, kwargs = _prepare_styled_payload(text, kwargs)
+        return await base_message_edit(self, text, *args, **kwargs)
+
+    async def _patched_message_reply(self, message=None, *args, **kwargs):
+        message, kwargs = _prepare_styled_payload(message, kwargs)
+        return await base_message_reply(self, message, *args, **kwargs)
+
+    async def _patched_message_respond(self, message=None, *args, **kwargs):
+        message, kwargs = _prepare_styled_payload(message, kwargs)
+        return await base_message_respond(self, message, *args, **kwargs)
 
     TelegramClient.send_message = _patched_send_message
     TelegramClient.send_file = _patched_send_file
     TelegramClient.edit_message = _patched_edit_message
-    TelegramClient._raven_extra_emoji_patch = True
+    Message.edit = _patched_message_edit
+    Message.reply = _patched_message_reply
+    Message.respond = _patched_message_respond
+    TelegramClient._ryhavean_global_style_patch = True
 
 
-_install_extra_emoji_patches()
+_install_global_message_patches()
 
 
 def get_session_string(raw_value: str | None = None) -> str:
