@@ -210,7 +210,7 @@ async def _build_tag_mention_entities(
             MessageEntityMentionName(
                 offset=current_offset,
                 length=_utf16_len(name),
-                user_id=mention_target.user_id,
+                user_id=mention_target,
             )
         )
         current_offset += _utf16_len(name)
