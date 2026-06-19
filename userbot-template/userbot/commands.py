@@ -22,7 +22,7 @@ from telethon.tl.types import (
     InputPeerUser,
     InputUser,
     MessageEntityBold,
-    MessageEntityMentionName,
+    MessageEntityTextUrl,
 )
 from telethon.utils import get_input_user
 
@@ -190,13 +190,13 @@ async def _collect_tag_members(event):
 
 async def _build_tag_mention_entities(
     event_client, users: Iterable, *, prefix_offset: int = 0
-) -> tuple[str, list[MessageEntityMentionName]]:
+) -> tuple[str, list[MessageEntityTextUrl]]:
     """
     Mention entity-ləri UTF-16 offset ilə düzgün qurur.
     prefix_offset: reason satırının UTF-16 uzunluğu (mention-ların başlanğıc offseti).
     """
     parts: list[str] = []
-    entities: list[MessageEntityMentionName] = []
+    entities: list[MessageEntityTextUrl] = []
     current_offset = prefix_offset
     for idx, user in enumerate(users):
         if idx:
@@ -204,13 +204,12 @@ async def _build_tag_mention_entities(
             parts.append(sep)
             current_offset += _utf16_len(sep)
         name = _display_name(user)
-        mention_target = await _resolve_mention_target(event_client, user)
         parts.append(name)
         entities.append(
-            MessageEntityMentionName(
+            MessageEntityTextUrl(
                 offset=current_offset,
                 length=_utf16_len(name),
-                user_id=mention_target,
+                url=f"tg://user?id={user.id}",
             )
         )
         current_offset += _utf16_len(name)
@@ -226,7 +225,7 @@ async def _run_tag_simple(event, count: int, delay: int, reason: str):
 
     Mesaj quruluşu:
       📝 <reason>     ← bold
-      User1 • User2   ← yalnız MentionName entity, auto-bold/premium emoji YOX
+      User1 • User2   ← yalnız tg://user?id text-url mention, auto-bold/premium emoji YOX
 
     Göndərmə zamanı _bypass_style=True istifadə olunur ki, main.py-dəki
     qlobal patch müdaxilə etməsin.
@@ -425,7 +424,7 @@ def register(client):
                 f"• <code>{P}tag 5 2</code> — 5-li, 2s fasilə, səbəbsiz\n\n"
                 "🔴 Dayandırmaq üçün: <code>.tagstop</code>\n\n"
                 "⚙️ <b>Xüsusiyyətlər:</b>\n"
-                "• Mention ilə işləyir (MentionName entity)\n"
+                "• Mention ilə işləyir (real clickable mention)\n"
                 "• Auto-bold yalnız səbəb mətninə tətbiq olunur\n"
                 "• Mention hissəsində premium emoji işləmir\n"
                 "• Sistemin auto-bold patchi mention hissəsinə müdaxilə etmir"
