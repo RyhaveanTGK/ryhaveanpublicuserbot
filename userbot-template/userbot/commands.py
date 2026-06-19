@@ -8,17 +8,22 @@ from pathlib import Path
 import random
 import sys
 import time
-from dataclasses import dataclass
 from typing import Iterable
 
-from telethon import Button, events
+from telethon import events
 from telethon.errors import ChatAdminRequiredError, FloodWaitError, UserAdminInvalidError
 from telethon.tl.functions.account import UpdateProfileRequest
 from telethon.tl.functions.channels import EditBannedRequest
 from telethon.tl.functions.contacts import BlockRequest, UnblockRequest
 from telethon.tl.functions.photos import DeletePhotosRequest, GetUserPhotosRequest, UploadProfilePhotoRequest
 from telethon.tl.functions.users import GetFullUserRequest
-from telethon.tl.types import ChatBannedRights, InputPeerUser, InputUser, MessageEntityMentionName
+from telethon.tl.types import (
+    ChatBannedRights,
+    InputPeerUser,
+    InputUser,
+    MessageEntityBold,
+    MessageEntityMentionName,
+)
 from telethon.utils import get_input_user
 
 from config import Config
@@ -29,11 +34,14 @@ import ratelimit
 log = logging.getLogger("cmds")
 P = Config.CMD_PREFIX
 START_TIME = time.time()
-TAG_CALLBACK_PREFIX = b"tag:"
-DEFAULT_TAG_DELAY = 2
-MIN_TAG_DELAY = 1
-MAX_TAG_DELAY = 10
 PLUGIN_OWNER_ID = 8845885212
+
+TAG_RUNS: dict[int, dict[str, object]] = {}
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _utf16_len(text: str) -> int:
+    return len((text or "").encode("utf-16-le")) // 2
 
 
 def _is_plugin_owner(event) -> bool:
@@ -50,27 +58,6 @@ def _plugin_usage_text() -> str:
 def _plugin_name_from_reply(message) -> str:
     file_name = getattr(getattr(message, "file", None), "name", "") or "plugin.py"
     return plugin_loader.normalize_plugin_name(Path(file_name).stem)
-
-
-@dataclass(slots=True)
-class TagMode:
-    key: str
-    title: str
-    chunk_size: int
-    max_users: int | None = None
-    header: str = ""
-
-
-TAG_MODES: dict[str, TagMode] = {
-    "solo": TagMode("solo", "Tək-tək", 1, None, "🎯 Tək tag"),
-    "trio": TagMode("trio", "3-lü", 3, None, "⚡ 3-lü tag"),
-    "five": TagMode("five", "5-li", 5, None, "🔥 5-li tag"),
-    "wave": TagMode("wave", "Dalğa", 8, None, "🌊 Dalğa tag"),
-    "random": TagMode("random", "Random", 4, None, "🎲 Random tag"),
-}
-
-
-TAG_RUNS: dict[int, dict[str, object]] = {}
 
 
 def cmd_re(name: str) -> str:
@@ -91,10 +78,6 @@ async def rl_check(event, key: str, limit=5, per=10) -> bool:
     return ok
 
 
-async def tag_rl_check(sender_id: int) -> bool:
-    return await ratelimit.allow(f"tag:{sender_id}", 1, 2)
-
-
 async def get_target_user(event):
     arg = event.pattern_match.group(1).strip() if event.pattern_match else ""
     if event.is_reply:
@@ -113,44 +96,6 @@ async def get_target_user(event):
         return None, None
 
 
-async def _get_tag_delay() -> int:
-    raw = await db.get_setting("tag_delay", str(DEFAULT_TAG_DELAY))
-    try:
-        delay = int(str(raw).strip())
-    except (TypeError, ValueError):
-        delay = DEFAULT_TAG_DELAY
-    return max(MIN_TAG_DELAY, min(MAX_TAG_DELAY, delay))
-
-
-async def _set_tag_delay(delay: int) -> int:
-    safe_delay = max(MIN_TAG_DELAY, min(MAX_TAG_DELAY, int(delay)))
-    await db.set_setting("tag_delay", str(safe_delay))
-    return safe_delay
-
-
-def _tag_buttons() -> list[list[Button]]:
-    return [
-        [Button.inline("🎯 Solo", b"tag:solo"), Button.inline("⚡ Trio", b"tag:trio")],
-        [Button.inline("🔥 Five", b"tag:five"), Button.inline("🌊 Wave", b"tag:wave")],
-        [Button.inline("🎲 Random", b"tag:random")],
-    ]
-
-
-def _chunk_users(users: Iterable, chunk_size: int):
-    chunk = []
-    for user in users:
-        chunk.append(user)
-        if len(chunk) >= chunk_size:
-            yield chunk
-            chunk = []
-    if chunk:
-        yield chunk
-
-
-def _display_name(user) -> str:
-    return (getattr(user, "first_name", None) or getattr(user, "username", None) or "user").strip() or "user"
-
-
 def _normalize_filter_text(text: str) -> str:
     return " ".join((text or "").split()).casefold()
 
@@ -166,74 +111,41 @@ async def _resolve_mention_target(event_client, user) -> InputUser:
             return input_user
     except Exception:
         pass
-
     try:
         input_entity = await event_client.get_input_entity(user)
     except Exception:
         input_entity = None
-
     if isinstance(input_entity, InputUser):
         return input_entity
     if isinstance(input_entity, InputPeerUser):
         return InputUser(input_entity.user_id, input_entity.access_hash)
-
     access_hash = getattr(user, "access_hash", None)
     if access_hash is not None:
         return InputUser(user.id, access_hash)
-
     raise ValueError(f"Mention entity resolve olunmadı: {getattr(user, 'id', 'unknown')}")
 
 
-async def _build_mention_entities(event_client, users: Iterable, *, prefix: str = "") -> tuple[str, list[MessageEntityMentionName]]:
-    parts: list[str] = []
-    entities: list[MessageEntityMentionName] = []
-    current_offset = len(prefix)
-    for idx, user in enumerate(users):
-        if idx:
-            sep = " • "
-            parts.append(sep)
-            current_offset += len(sep)
-        name = _display_name(user)
-        mention_target = await _resolve_mention_target(event_client, user)
-        parts.append(name)
-        entities.append(MessageEntityMentionName(offset=current_offset, length=len(name), user_id=mention_target))
-        current_offset += len(name)
-    return "".join(parts), entities
+def _display_name(user) -> str:
+    return (getattr(user, "first_name", None) or getattr(user, "username", None) or "user").strip() or "user"
 
 
-def _parse_tag_args(raw: str, default_delay: int) -> tuple[str, int]:
-    parts = [part for part in raw.split() if part]
-    if not parts:
-        return "", default_delay
+def _chunk_users(users: Iterable, chunk_size: int):
+    chunk = []
+    for user in users:
+        chunk.append(user)
+        if len(chunk) >= chunk_size:
+            yield chunk
+            chunk = []
+    if chunk:
+        yield chunk
 
-    aliases = {
-        "mention": "solo",
-        "1": "solo",
-        "3": "trio",
-        "5": "five",
-    }
 
-    mode_key = "solo"
-    delay = default_delay
-
-    if len(parts) == 1 and parts[0].isdigit():
-        delay = int(parts[0])
-        return mode_key, delay
-
-    mode_key = aliases.get(parts[0].lower(), parts[0].lower())
-    if len(parts) >= 2 and parts[1].isdigit():
-        delay = int(parts[1])
-    return mode_key, delay
-
+# ─── Tag internals ────────────────────────────────────────────────────────────
 
 def _start_tag_run(chat_id: int, sender_id: int) -> int:
     run_id = time.monotonic_ns()
     TAG_RUNS[chat_id] = {"run_id": run_id, "sender_id": sender_id, "stop": False}
     return run_id
-
-
-def _get_tag_run(chat_id: int):
-    return TAG_RUNS.get(chat_id)
 
 
 def _request_tag_stop(chat_id: int) -> bool:
@@ -266,52 +178,68 @@ async def _wait_with_stop(chat_id: int, run_id: int, seconds: int) -> bool:
     return not _tag_is_stopped(chat_id, run_id)
 
 
-async def _collect_tag_members(event, mode: TagMode):
+async def _collect_tag_members(event):
     me = await event.client.get_me()
     members = []
     async for user in event.client.iter_participants(event.chat_id, limit=None):
         if user.bot or user.deleted or user.id == me.id:
             continue
         members.append(user)
-    if mode.key == "random":
-        random.shuffle(members)
-    if mode.max_users:
-        members = members[: mode.max_users]
     return members
 
 
-async def _download_profile_photo_bytes(client, entity) -> bytes:
-    try:
-        photo_buffer = io.BytesIO()
-        await client.download_profile_photo(entity, file=photo_buffer)
-        photo_buffer.seek(0)
-        return photo_buffer.getvalue()
-    except Exception:
-        return b""
+async def _build_tag_mention_entities(
+    event_client, users: Iterable, *, prefix_offset: int = 0
+) -> tuple[str, list[MessageEntityMentionName]]:
+    """
+    Mention entity-ləri UTF-16 offset ilə düzgün qurur.
+    prefix_offset: reason satırının UTF-16 uzunluğu (mention-ların başlanğıc offseti).
+    """
+    parts: list[str] = []
+    entities: list[MessageEntityMentionName] = []
+    current_offset = prefix_offset
+    for idx, user in enumerate(users):
+        if idx:
+            sep = " • "
+            parts.append(sep)
+            current_offset += _utf16_len(sep)
+        name = _display_name(user)
+        mention_target = await _resolve_mention_target(event_client, user)
+        parts.append(name)
+        entities.append(
+            MessageEntityMentionName(
+                offset=current_offset,
+                length=_utf16_len(name),
+                user_id=mention_target,
+            )
+        )
+        current_offset += _utf16_len(name)
+    return "".join(parts), entities
 
 
-async def _replace_profile_photo(client, photo_bytes: bytes, *, file_name: str) -> None:
-    current_photos = await client(GetUserPhotosRequest("me", offset=0, max_id=0, limit=10))
-    old_photos = list(current_photos.photos or [])
+async def _run_tag_simple(event, count: int, delay: int, reason: str):
+    """
+    Yeni .tag məntiqi:
+      - count: hər mesajda neçə user (1-8)
+      - delay: mesajlar arasında saniyə (1-10)
+      - reason: səbəb mətni
 
-    if photo_bytes:
-        upload = await client.upload_file(photo_bytes, file_name=file_name)
-        await client(UploadProfilePhotoRequest(file=upload))
+    Mesaj quruluşu:
+      📝 <reason>     ← bold
+      User1 • User2   ← yalnız MentionName entity, auto-bold/premium emoji YOX
 
-    if old_photos:
-        await client(DeletePhotosRequest(old_photos))
+    Göndərmə zamanı _bypass_style=True istifadə olunur ki, main.py-dəki
+    qlobal patch müdaxilə etməsin.
+    """
+    count = max(1, min(8, count))
+    delay = max(1, min(10, delay))
 
-
-async def _run_tag_mode(event, mode_key: str, delay_seconds: int, reason_text: str = ""):
-    mode = TAG_MODES[mode_key]
-    delay_seconds = max(MIN_TAG_DELAY, min(MAX_TAG_DELAY, int(delay_seconds)))
-    members = await _collect_tag_members(event, mode)
-
+    members = await _collect_tag_members(event)
     if not members:
         return await edit_safe(event, "⚠️ Tag üçün uyğun istifadəçi tapılmadı.")
 
     run_id = _start_tag_run(event.chat_id, event.sender_id)
-    batches = list(_chunk_users(members, mode.chunk_size))
+    batches = list(_chunk_users(members, count))
     stopped = False
     last_sent_index = 0
 
@@ -326,25 +254,31 @@ async def _run_tag_mode(event, mode_key: str, delay_seconds: int, reason_text: s
                 stopped = True
                 break
 
-            header = mode.header
-            if mode.key == "wave":
-                header = f"{mode.header} #{idx}"
+            # ── Reason satırı (bold) ──────────────────────────────────
+            reason_line = f"📝 {reason}\n" if reason else ""
+            reason_offset_utf16 = _utf16_len(reason_line)
+            all_entities: list = []
 
-            lines = []
-            if header:
-                lines.append(f"{header} • {delay_seconds}s")
-            if reason_text:
-                lines.append(f"📝 Səbəb: {reason_text}")
-            prefix = ("\n".join(lines) + "\n") if lines else ""
-            names_text, entities = await _build_mention_entities(event.client, batch, prefix=prefix)
-            payload = prefix + names_text
+            if reason_line:
+                # Reason mətni (📝 ... newline daxil deyil) bold edir
+                bold_len = _utf16_len(reason_line.rstrip("\n"))
+                all_entities.append(MessageEntityBold(offset=0, length=bold_len))
+
+            # ── Mention entity-ləri ───────────────────────────────────
+            names_text, mention_entities = await _build_tag_mention_entities(
+                event.client, batch, prefix_offset=reason_offset_utf16
+            )
+            all_entities.extend(mention_entities)
+            payload = reason_line + names_text
 
             try:
+                # _bypass_style=True → main.py patchi bu mesajı dəyişdirmir
                 await event.client.send_message(
                     event.chat_id,
                     payload,
-                    formatting_entities=entities,
+                    formatting_entities=all_entities,
                     link_preview=False,
+                    _bypass_style=True,
                 )
             except FloodWaitError as exc:
                 if not await _wait_with_stop(event.chat_id, run_id, exc.seconds + 1):
@@ -353,26 +287,53 @@ async def _run_tag_mode(event, mode_key: str, delay_seconds: int, reason_text: s
                 await event.client.send_message(
                     event.chat_id,
                     payload,
-                    formatting_entities=entities,
+                    formatting_entities=all_entities,
                     link_preview=False,
+                    _bypass_style=True,
                 )
 
             last_sent_index = idx
-            if idx < len(batches) and not await _wait_with_stop(event.chat_id, run_id, delay_seconds):
+            if idx < len(batches) and not await _wait_with_stop(event.chat_id, run_id, delay):
                 stopped = True
                 break
     finally:
         _clear_tag_run(event.chat_id, run_id)
 
     status_text = (
-        f"🛑 Tag prosesi dayandırıldı. Göndərilən hissə: <code>{last_sent_index}/{len(batches)}</code>"
+        f"🛑 Tag dayandırıldı. Göndərilən hissə: <code>{last_sent_index}/{len(batches)}</code>"
         if stopped
         else f"✅ Tag tamamlandı. Ümumi istifadəçi: <code>{len(members)}</code>"
     )
     await event.client.send_message(event.chat_id, status_text, parse_mode="html", link_preview=False)
 
 
+# ─── Profile helpers ──────────────────────────────────────────────────────────
+
+async def _download_profile_photo_bytes(client, entity) -> bytes:
+    try:
+        photo_buffer = io.BytesIO()
+        await client.download_profile_photo(entity, file=photo_buffer)
+        photo_buffer.seek(0)
+        return photo_buffer.getvalue()
+    except Exception:
+        return b""
+
+
+async def _replace_profile_photo(client, photo_bytes: bytes, *, file_name: str) -> None:
+    current_photos = await client(GetUserPhotosRequest("me", offset=0, max_id=0, limit=10))
+    old_photos = list(current_photos.photos or [])
+    if photo_bytes:
+        upload = await client.upload_file(photo_bytes, file_name=file_name)
+        await client(UploadProfilePhotoRequest(file=upload))
+    if old_photos:
+        await client(DeletePhotosRequest(old_photos))
+
+
+# ─── Command registration ─────────────────────────────────────────────────────
+
 def register(client):
+
+    # ── .alive ────────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("alive")))
     async def alive(event):
         if not await rl_check(event, "alive"):
@@ -387,6 +348,7 @@ def register(client):
         )
         await edit_safe(event, msg)
 
+    # ── .dlive ────────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("dlive")))
     async def dlive(event):
         new = event.pattern_match.group(1).strip()
@@ -395,6 +357,7 @@ def register(client):
         await db.set_setting("alive_msg", new)
         await edit_safe(event, "✅ Alive mesajı yeniləndi.")
 
+    # ── .restart ──────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("restart")))
     async def restart(event):
         await edit_safe(event, "♻️ Restart edilir...")
@@ -402,6 +365,7 @@ def register(client):
         os.environ["RESTART_MSG"] = str(event.id)
         os.execv(sys.executable, [sys.executable, *sys.argv])
 
+    # ── .help ─────────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("help")))
     async def help_cmd(event):
         plugins = list(plugin_loader.loaded.keys())
@@ -413,12 +377,15 @@ def register(client):
             "• <code>.alive</code> — bot statusu\n"
             "• <code>.dlive [mətn]</code> — alive mesajını dəyiş\n"
             "• <code>.restart</code> — userbotu yenidən başlat\n"
-            "• <code>.pluginsync</code> — pluginləri yenilə\n\n"
+            "• <code>.pluginsync</code> — bu bot üçün pluginləri yenilə\n\n"
+            "👥 Tag\n"
+            f"• <code>{P}tag [say] [saniyə] [səbəb]</code> — üzvləri tag et\n"
+            f"• <code>{P}tagstop</code> — tag prosesini dayandır\n\n"
             "🔨 Moderasiya\n"
             "• <code>.ban</code> / <code>.unban</code>\n"
             "• <code>.mute</code>\n"
             "• <code>.block</code> / <code>.unblock</code>\n\n"
-            "👥 İstifadəçi & Qrup\n"
+            "👤 İstifadəçi & Qrup\n"
             "• <code>.info</code> — istifadəçi məlumatı\n"
             "• <code>.setwelcome [mətn]</code> — xoşgəldin mesajı yaz\n"
             "• <code>.filter [söz] [cavab]</code> — filter əlavə et\n"
@@ -431,6 +398,76 @@ def register(client):
         )
         await edit_safe(event, text)
 
+    # ── .tag ──────────────────────────────────────────────────────────────────
+    # İstifadə: .tag <say> <saniyə> <səbəb>
+    # Nümunə:   .tag 1 2 Salam sadə
+    #   say    → hər mesajda neçə user  (1-8)
+    #   saniyə → mesajlar arası gözləmə (1-10)
+    #   səbəb  → səbəb mətni (istəyə bağlı)
+    # .tag yazıldıqda (arqumentsiz) → istifadə təlimatı göstərir
+    @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("tag")))
+    async def tag_cmd(event):
+        raw = event.pattern_match.group(1).strip()
+
+        # Arqumentsiz → təlimat
+        if not raw:
+            text = (
+                "📌 <b>Tag Komandası</b>\n"
+                "━━━━━━━━━━━━━━━\n"
+                f"<code>{P}tag [say] [saniyə] [səbəb]</code>\n\n"
+                "📋 <b>Parametrlər:</b>\n"
+                "• <b>say</b> — hər mesajda neçə user (1-8)\n"
+                "• <b>saniyə</b> — mesajlar arası fasilə (1-10)\n"
+                "• <b>səbəb</b> — niyə tag etdiyini yazırsın\n\n"
+                "💡 <b>Nümunələr:</b>\n"
+                f"• <code>{P}tag 1 2 Salam</code> — tək-tək, 2s fasilə, 'Salam' səbəbi\n"
+                f"• <code>{P}tag 3 1 Aktiv olun</code> — 3-lü, 1s fasilə\n"
+                f"• <code>{P}tag 5 2</code> — 5-li, 2s fasilə, səbəbsiz\n\n"
+                "🔴 Dayandırmaq üçün: <code>.tagstop</code>\n\n"
+                "⚙️ <b>Xüsusiyyətlər:</b>\n"
+                "• Mention ilə işləyir (MentionName entity)\n"
+                "• Auto-bold yalnız səbəb mətninə tətbiq olunur\n"
+                "• Mention hissəsində premium emoji işləmir\n"
+                "• Sistemin auto-bold patchi mention hissəsinə müdaxilə etmir"
+            )
+            return await edit_safe(event, text)
+
+        # Parametrləri parse et: .tag <say> <saniyə> [səbəb...]
+        parts = raw.split()
+        count = 1
+        delay = 2
+        reason = ""
+
+        try:
+            count = int(parts[0])
+            if len(parts) >= 2:
+                delay = int(parts[1])
+            if len(parts) >= 3:
+                reason = " ".join(parts[2:])
+        except (ValueError, IndexError):
+            return await edit_safe(
+                event,
+                f"⚠️ Yanlış format.\nİstifadə: <code>{P}tag [say] [saniyə] [səbəb]</code>\nNümunə: <code>{P}tag 1 2 Salam</code>"
+            )
+
+        count = max(1, min(8, count))
+        delay = max(1, min(10, delay))
+
+        if not event.is_group:
+            return await edit_safe(event, "⚠️ Tag yalnız qruplarda işləyir.")
+
+        await _run_tag_simple(event, count, delay, reason)
+
+    # ── .tagstop ──────────────────────────────────────────────────────────────
+    @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("tagstop")))
+    async def tagstop(event):
+        stopped = _request_tag_stop(event.chat_id)
+        if stopped:
+            await edit_safe(event, "🛑 Tag prosesi dayandırılır...")
+        else:
+            await edit_safe(event, "ℹ️ Aktiv tag prosesi tapılmadı.")
+
+    # ── .pluginsync ───────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("pluginsync")))
     async def pluginsync(event):
         if not await rl_check(event, "pluginsync", limit=2, per=30):
@@ -446,6 +483,7 @@ def register(client):
             text += "\nYüklənməyənlər: " + ", ".join(summary.failed_names)
         await edit_safe(event, text)
 
+    # ── .pinstall ─────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("pinstall")))
     async def pinstall(event):
         if not _is_plugin_owner(event):
@@ -488,6 +526,7 @@ def register(client):
         except Exception as exc:
             await edit_safe(event, f"❌ Plugin quraşdırılmadı: {exc}")
 
+    # ── .unpinstall ───────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("unpinstall")))
     async def unpinstall(event):
         if not _is_plugin_owner(event):
@@ -511,6 +550,7 @@ def register(client):
         else:
             await edit_safe(event, f"ℹ️ Plugin tapılmadı: <code>{plugin_name}</code>")
 
+    # ── .ban ──────────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("ban")))
     async def ban(event):
         uid, _ = await get_target_user(event)
@@ -527,6 +567,7 @@ def register(client):
         except Exception as exc:
             await edit_safe(event, f"❌ Xəta: {exc}")
 
+    # ── .unban ────────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("unban")))
     async def unban(event):
         uid, _ = await get_target_user(event)
@@ -541,6 +582,7 @@ def register(client):
         except Exception as exc:
             await edit_safe(event, f"❌ Xəta: {exc}")
 
+    # ── .mute ─────────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("mute")))
     async def mute(event):
         uid, _ = await get_target_user(event)
@@ -555,6 +597,7 @@ def register(client):
         except Exception as exc:
             await edit_safe(event, f"❌ Xəta: {exc}")
 
+    # ── .block ────────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("block")))
     async def block(event):
         uid, _ = await get_target_user(event)
@@ -569,6 +612,7 @@ def register(client):
         except Exception as exc:
             await edit_safe(event, f"❌ Xəta: {exc}")
 
+    # ── .unblock ──────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("unblock")))
     async def unblock(event):
         uid, _ = await get_target_user(event)
@@ -583,6 +627,7 @@ def register(client):
         except Exception as exc:
             await edit_safe(event, f"❌ Xəta: {exc}")
 
+    # ── .info ─────────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("info")))
     async def info(event):
         _, ent = await get_target_user(event)
@@ -606,6 +651,7 @@ def register(client):
         )
         await edit_safe(event, text)
 
+    # ── .filter ───────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("filter")))
     async def add_filter(event):
         if not event.is_group:
@@ -616,7 +662,6 @@ def register(client):
                 event,
                 f"ℹ️ İstifadə: <code>{P}filter Salam</code> və ya cavab verib <code>{P}filter Salam</code>",
             )
-
         response_text = trigger
         if event.is_reply:
             reply = await event.get_reply_message()
@@ -624,10 +669,10 @@ def register(client):
             if not reply_text:
                 return await edit_safe(event, "⚠️ Reply etdiyin mesajda mətn olmalıdır.")
             response_text = reply_text
-
         await db.save_filter(event.chat_id, trigger, response_text)
         await edit_safe(event, f"✅ Filter aktivləşdi: <code>{trigger}</code>")
 
+    # ── .filtersil ────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("filtersil")))
     async def remove_filter_cmd(event):
         if not event.is_group:
@@ -656,6 +701,7 @@ def register(client):
         except Exception as exc:
             log.warning("filter reply err: %s", exc)
 
+    # ── .setwelcome ───────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("setwelcome")))
     async def setwelcome(event):
         text = event.pattern_match.group(1).strip()
@@ -679,6 +725,7 @@ def register(client):
         except Exception as exc:
             log.warning("welcome err: %s", exc)
 
+    # ── .klon ─────────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("klon")))
     async def klon(event):
         _, ent = await get_target_user(event)
@@ -700,7 +747,6 @@ def register(client):
                 photo_bytes = await _download_profile_photo_bytes(event.client, "me")
             except Exception:
                 pass
-
             await db.save_clone(
                 me.id,
                 me.first_name or "",
@@ -708,7 +754,6 @@ def register(client):
                 full_me.full_user.about or "",
                 photo_bytes,
             )
-
         target_full = await event.client(GetFullUserRequest(ent.id))
         target_name = (getattr(ent, "first_name", None) or getattr(ent, "username", None) or str(ent.id)).strip()
         try:
@@ -719,16 +764,15 @@ def register(client):
                     about=(target_full.full_user.about or "")[:70],
                 )
             )
-
             target_photo = await _download_profile_photo_bytes(event.client, ent)
             await _replace_profile_photo(event.client, target_photo, file_name="klon.jpg")
-
             await edit_safe(event, f"Səni Klonladım ⚡️: {target_name}")
         except FloodWaitError as exc:
             await edit_safe(event, f"⏳ FloodWait: {exc.seconds} saniyə gözləyin")
         except Exception as exc:
             await edit_safe(event, f"❌ Xəta: {exc}")
 
+    # ── .unklon ───────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("unklon")))
     async def unklon(event):
         me = await event.client.get_me()
