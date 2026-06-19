@@ -19,10 +19,10 @@ from telethon.tl.functions.photos import DeletePhotosRequest, GetUserPhotosReque
 from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.types import (
     ChatBannedRights,
+    InputMessageEntityMentionName,
     InputPeerUser,
     InputUser,
     MessageEntityBold,
-    MessageEntityTextUrl,
 )
 from telethon.utils import get_input_user
 
@@ -190,13 +190,14 @@ async def _collect_tag_members(event):
 
 async def _build_tag_mention_entities(
     event_client, users: Iterable, *, prefix_offset: int = 0
-) -> tuple[str, list[MessageEntityTextUrl]]:
+) -> tuple[str, list[InputMessageEntityMentionName]]:
     """
-    Mention entity-ləri UTF-16 offset ilə düzgün qurur.
+    Real mention entity-ləri UTF-16 offset ilə düzgün qurur.
+    tg:// link qaytarmır; Telegram daxilində birbaşa profil açılır.
     prefix_offset: reason satırının UTF-16 uzunluğu (mention-ların başlanğıc offseti).
     """
     parts: list[str] = []
-    entities: list[MessageEntityTextUrl] = []
+    entities: list[InputMessageEntityMentionName] = []
     current_offset = prefix_offset
     for idx, user in enumerate(users):
         if idx:
@@ -204,12 +205,13 @@ async def _build_tag_mention_entities(
             parts.append(sep)
             current_offset += _utf16_len(sep)
         name = _display_name(user)
+        input_user = await _resolve_mention_target(event_client, user)
         parts.append(name)
         entities.append(
-            MessageEntityTextUrl(
+            InputMessageEntityMentionName(
                 offset=current_offset,
                 length=_utf16_len(name),
-                url=f"tg://user?id={user.id}",
+                user_id=input_user,
             )
         )
         current_offset += _utf16_len(name)
@@ -225,7 +227,7 @@ async def _run_tag_simple(event, count: int, delay: int, reason: str):
 
     Mesaj quruluşu:
       📝 <reason>     ← bold
-      User1 • User2   ← yalnız tg://user?id text-url mention, auto-bold/premium emoji YOX
+      User1 • User2   ← yalnız real mention entity, auto-bold/premium emoji YOX
 
     Göndərmə zamanı _bypass_style=True istifadə olunur ki, main.py-dəki
     qlobal patch müdaxilə etməsin.
