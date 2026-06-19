@@ -206,13 +206,14 @@ async def _build_tag_mention_entities(
         name = _display_name(user)
         mention_target = await _resolve_mention_target(event_client, user)
         parts.append(name)
-        entities.append(
+                entities.append(
             MessageEntityMentionName(
                 offset=current_offset,
                 length=_utf16_len(name),
-                user_id=mention_target,
+                user_id=mention_target.user_id,  # <--- Bura .user_id əlavə edin
             )
         )
+
         current_offset += _utf16_len(name)
     return "".join(parts), entities
 
