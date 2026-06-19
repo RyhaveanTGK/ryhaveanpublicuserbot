@@ -14,7 +14,7 @@ from fastapi.responses import PlainTextResponse
 from telethon import TelegramClient
 from telethon.tl.custom import Message
 from telethon.sessions import StringSession
-from telethon.tl.types import MessageEntityBold, MessageEntityCode, MessageEntityPre
+from telethon.tl.types import MessageEntityBold
 
 from config import Config
 import commands
@@ -84,11 +84,14 @@ def _build_auto_bold_entities(text: str, entities: list) -> list[MessageEntityBo
 
     excluded = []
     for entity in entities:
-        if isinstance(entity, (MessageEntityCode, MessageEntityPre)):
-            start = max(0, int(entity.offset))
-            end = min(total_length, start + max(0, int(entity.length)))
-            if end > start:
-                excluded.append((start, end))
+        offset = getattr(entity, "offset", None)
+        length = getattr(entity, "length", None)
+        if offset is None or length is None:
+            continue
+        start = max(0, int(offset))
+        end = min(total_length, start + max(0, int(length)))
+        if end > start:
+            excluded.append((start, end))
 
     excluded = _merge_ranges(excluded)
     bold_entities: list[MessageEntityBold] = []
