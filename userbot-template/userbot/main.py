@@ -106,6 +106,9 @@ def _prepare_styled_payload(raw_text: str | None, kwargs: dict):
     if not isinstance(raw_text, str):
         return raw_text, kwargs
 
+    if kwargs.pop("_bypass_style", False):
+        return raw_text, kwargs
+
     parse_mode = kwargs.pop("parse_mode", None)
     base_entities = kwargs.pop("formatting_entities", None) or kwargs.pop("entities", None)
     parsed_text, combined_entities = emoji_utils.apply_premium_emojis(raw_text, base_entities, parse_mode)
