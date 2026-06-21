@@ -400,7 +400,7 @@ async def start_userbot() -> bool:
                 try:
                     await tg_client.send_message(
                         "me",
-                        "✨ <b>Ryhavean Userbot Come Back</b>",
+                        "✨ <b>Ryhavean Userbot Update V1.8</b>",
                         parse_mode="html",
                     )
                 except Exception:
