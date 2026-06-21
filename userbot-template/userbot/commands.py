@@ -427,7 +427,7 @@ def register(client):
             "🇬🇪 Ryhavean Userbot \n"
             "━━━━━━━━━━━━━━━\n"
             "🤖 Sistem: <code>online</code>\n"
-            "⚡ Versiya: <code>2.1.0</code>\n"
+            "⚡ Versiya: <code>1.8</code>\n"
             f"⏱ Uptime: <code>{uptime}s</code>"
         )
         await edit_safe(event, msg)
