@@ -6,6 +6,7 @@ import logging
 import os
 from pathlib import Path
 import random
+import re
 import sys
 import time
 from typing import Iterable
@@ -37,6 +38,10 @@ START_TIME = time.time()
 PLUGIN_OWNER_ID = 8845885212
 
 TAG_RUNS: dict[int, dict[str, object]] = {}
+FILTER_SPAM_STATE: dict[tuple[int, int], dict[str, object]] = {}
+FILTER_COOLDOWNS: dict[tuple[int, str], float] = {}
+FILTER_STREAK_RESET_SECONDS = 90
+FILTER_COOLDOWN_SECONDS = 30
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -102,6 +107,84 @@ def _normalize_filter_text(text: str) -> str:
 
 def _extract_message_text(message) -> str:
     return " ".join(((getattr(message, "raw_text", "") or getattr(message, "message", "") or "")).split()).strip()
+
+
+def _strip_wrapper_pair(value: str) -> str:
+    text = (value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        return text[1:-1].strip()
+    if text.startswith("(") and text.endswith(")"):
+        return text[1:-1].strip()
+    return text
+
+
+def _parse_filter_command(raw: str) -> tuple[str, str]:
+    text = (raw or "").strip()
+    if not text:
+        return "", ""
+
+    pair_patterns = [
+        r"^\((.+?)\)\s+\((.+)\)$",
+        r'^"(.+?)"\s+"(.+)"$',
+        r"^'(.+?)'\s+'(.+)'$",
+    ]
+    for pattern in pair_patterns:
+        match = re.fullmatch(pattern, text, flags=re.S)
+        if match:
+            return match.group(1).strip(), match.group(2).strip()
+
+    parts = text.split(maxsplit=1)
+    if len(parts) == 2:
+        return _strip_wrapper_pair(parts[0]), _strip_wrapper_pair(parts[1])
+    return _strip_wrapper_pair(text), ""
+
+
+def _filter_spam_state_key(chat_id: int, sender_id: int) -> tuple[int, int]:
+    return int(chat_id), int(sender_id or 0)
+
+
+def _filter_cooldown_key(chat_id: int, trigger: str) -> tuple[int, str]:
+    return int(chat_id), _normalize_filter_text(trigger)
+
+
+def _reset_filter_spam_state(chat_id: int, sender_id: int) -> None:
+    FILTER_SPAM_STATE.pop(_filter_spam_state_key(chat_id, sender_id), None)
+
+
+def _is_filter_muted(chat_id: int, trigger: str) -> bool:
+    key = _filter_cooldown_key(chat_id, trigger)
+    now = time.monotonic()
+    until = float(FILTER_COOLDOWNS.get(key, 0.0) or 0.0)
+    if until <= now:
+        FILTER_COOLDOWNS.pop(key, None)
+        return False
+    return True
+
+
+def _register_filter_hit(chat_id: int, sender_id: int, trigger: str) -> bool:
+    norm_trigger = _normalize_filter_text(trigger)
+    if not norm_trigger:
+        return False
+
+    state_key = _filter_spam_state_key(chat_id, sender_id)
+    now = time.monotonic()
+    current = FILTER_SPAM_STATE.get(state_key)
+    if (
+        current
+        and current.get("trigger") == norm_trigger
+        and now - float(current.get("last_time", 0.0) or 0.0) <= FILTER_STREAK_RESET_SECONDS
+    ):
+        current["count"] = int(current.get("count", 0) or 0) + 1
+        current["last_time"] = now
+    else:
+        current = {"trigger": norm_trigger, "count": 1, "last_time": now}
+
+    FILTER_SPAM_STATE[state_key] = current
+    if int(current.get("count", 0) or 0) >= 3:
+        FILTER_COOLDOWNS[_filter_cooldown_key(chat_id, norm_trigger)] = now + FILTER_COOLDOWN_SECONDS
+        FILTER_SPAM_STATE.pop(state_key, None)
+        return True
+    return False
 
 
 async def _resolve_mention_target(event_client, user) -> InputUser:
@@ -256,7 +339,7 @@ async def _run_tag_simple(event, count: int, delay: int, reason: str):
                 break
 
             # ── Reason satırı (bold) ──────────────────────────────────
-            reason_line = f"📝 {reason}\n" if reason else ""
+            reason_line = f" {reason}\n" if reason else ""
             reason_offset_utf16 = _utf16_len(reason_line)
             all_entities: list = []
 
@@ -389,8 +472,8 @@ def register(client):
             "👤 İstifadəçi & Qrup\n"
             "• <code>.info</code> — istifadəçi məlumatı\n"
             "• <code>.setwelcome [mətn]</code> — xoşgəldin mesajı yaz\n"
-            "• <code>.filter [söz] [cavab]</code> — filter əlavə et\n"
-            "• <code>.filtersil [söz]</code> — filter sil\n\n"
+            "• <code>.filter (mətn) (cavab mətni)</code> — filter əlavə et\n"
+            "• <code>.filtersil [mətn]</code> — filter sil\n\n"
             "🧬 Profil\n"
             "• <code>.klon</code> — yalnız real istifadəçini klonla\n"
             "• <code>.unklon</code> — orijinal profilə qayıt\n\n"
@@ -657,31 +740,43 @@ def register(client):
     async def add_filter(event):
         if not event.is_group:
             return await edit_safe(event, "⚠️ Yalnız qruplarda işləyir.")
-        trigger = event.pattern_match.group(1).strip()
+
+        raw_args = event.pattern_match.group(1).strip()
+        trigger, response_text = _parse_filter_command(raw_args)
+
         if not trigger:
             return await edit_safe(
                 event,
-                f"ℹ️ İstifadə: <code>{P}filter Salam</code> və ya cavab verib <code>{P}filter Salam</code>",
+                f"ℹ️ İstifadə: <code>{P}filter (Salam) (Aleykum salam)</code>\n"
+                f"və ya reply edib <code>{P}filter (Salam)</code>",
             )
-        response_text = trigger
-        if event.is_reply:
+
+        if not response_text and event.is_reply:
             reply = await event.get_reply_message()
             reply_text = _extract_message_text(reply)
             if not reply_text:
                 return await edit_safe(event, "⚠️ Reply etdiyin mesajda mətn olmalıdır.")
             response_text = reply_text
+
+        if not response_text:
+            return await edit_safe(
+                event,
+                f"⚠️ Cavab mətni boşdur. Format: <code>{P}filter (Mətin) (Cavab Mətini)</code>",
+            )
+
         await db.save_filter(event.chat_id, trigger, response_text)
-        await edit_safe(event, f"✅ Filter aktivləşdi: <code>{trigger}</code>")
+        await edit_safe(event, f"✅ Filter aktivləşdi: <code>{trigger}</code> → <code>{response_text}</code>")
 
     # ── .filtersil ────────────────────────────────────────────────────────────
     @client.on(events.NewMessage(outgoing=True, pattern=cmd_re("filtersil")))
     async def remove_filter_cmd(event):
         if not event.is_group:
             return await edit_safe(event, "⚠️ Yalnız qruplarda işləyir.")
-        trigger = event.pattern_match.group(1).strip()
+        trigger = _strip_wrapper_pair(event.pattern_match.group(1).strip())
         if not trigger:
-            return await edit_safe(event, f"ℹ️ İstifadə: <code>{P}filtersil Salam</code>")
+            return await edit_safe(event, f"ℹ️ İstifadə: <code>{P}filtersil (Salam)</code>")
         removed = await db.remove_filter(event.chat_id, trigger)
+        FILTER_COOLDOWNS.pop(_filter_cooldown_key(event.chat_id, trigger), None)
         if removed:
             await edit_safe(event, f"🗑 Filter silindi: <code>{trigger}</code>")
         else:
@@ -694,9 +789,26 @@ def register(client):
         message_text = _extract_message_text(event.message)
         if not message_text:
             return
+
+        sender_id = int(getattr(event, "sender_id", 0) or 0)
         response_text = await db.get_filter(event.chat_id, message_text)
         if not response_text:
+            _reset_filter_spam_state(event.chat_id, sender_id)
             return
+
+        if _is_filter_muted(event.chat_id, message_text):
+            return
+
+        if _register_filter_hit(event.chat_id, sender_id, message_text):
+            log.info(
+                "filter spam cooldown: chat=%s sender=%s trigger=%r seconds=%s",
+                event.chat_id,
+                sender_id,
+                message_text,
+                FILTER_COOLDOWN_SECONDS,
+            )
+            return
+
         try:
             await event.reply(response_text)
         except Exception as exc:
