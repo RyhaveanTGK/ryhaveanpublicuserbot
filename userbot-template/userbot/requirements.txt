@@ -2,6 +2,7 @@
 telethon==1.36.0
 Pillow==10.3.0
 phonenumbers
+pyrogram tgcrypto
 pyfiglet
 # Sizin mövcud paketləriniz
 fastapi==0.115.0
